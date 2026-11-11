@@ -17,6 +17,7 @@ python3 serve.py
 2. 메뉴의 **온라인 · 같은 네트워크(VPN) 방** → 화면 아래 주소들 중 친구와 같은 네트워크(VPN) 주소를 친구에게 보낸다 (`http://<IP>:8000/?lan=1`)
 3. 친구가 그 주소를 열면 바로 시작. 호스트 PC 방화벽이 8000번 포트를 막으면 열어 줘야 한다
 - 호스트가 게임 전체를 돌리고 화면을 영상으로 보낸다. 친구는 영상을 보며 자기 키보드·마우스 입력만 보낸다 (`src/net/online.js`).
+- 친구는 화면 오른쪽 아래 **[키 설정]**에서 자기 키를 바꿀 수 있다 (친구 브라우저에 저장).
 - 호스트는 게임 탭을 화면에 띄워 둬야 한다 (탭을 내리면 브라우저가 게임을 멈춰 친구 화면도 멈춤).
 - `localhost` 링크는 같은 컴퓨터에서만 열린다. 멀리 있는 친구와 하려면 이 폴더를 인터넷에 올려야 한다 (GitHub Pages·itch.io 등).
 - 연결 주선은 PeerJS 공개 서버를 쓴다. 일부 회사·학교 네트워크에서는 P2P 연결이 막힐 수 있다.
@@ -40,7 +41,8 @@ npm test
 | `src/logic/units.js` | 판 위 기물의 HP·공격력 (베테랑 포함) |
 | `src/logic/ai.js` | 테스트용 컴퓨터 상대 (체스 수 + 전투 봇) |
 | `src/input/controls.js` | 키 → `{ player, action }` 명령 변환, 키 배치, 온라인 친구 입력 전달 |
-| `src/net/online.js` | 링크 접속 온라인 (방 만들기·친구 화면) |
+| `src/net/online.js` | 링크 접속 온라인 (인터넷 방·같은 네트워크 방, 친구 화면) |
+| `src/net/guestKeys.js` | 친구 화면의 키 설정 창 |
 | `src/scenes/BoardScene.js` | 체스판 화면 |
 | `src/scenes/BattleScene.js` | 탑다운 전투 화면 (투기장) |
 | `src/scenes/TurnBattleScene.js` | 턴제 전투 화면 (성채) |

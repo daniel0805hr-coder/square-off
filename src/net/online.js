@@ -7,6 +7,7 @@
 // 호스트 → 친구 메시지(peer만): { t: 'full' } (이미 다른 친구가 들어와 있음)
 
 import { remoteInput, actionFor, mouseCode, online } from '../input/controls.js';
+import { addGuestKeys } from './guestKeys.js';
 
 const PREFIX = 'squareoff-';
 const GAME_W = 640, GAME_H = 360;
@@ -258,7 +259,7 @@ function guestView(root, screen) {
   Object.assign(badge.style, {
     position: 'fixed', left: '8px', bottom: '8px', color: '#8d8798', font: '11px Galmuri9, sans-serif', pointerEvents: 'none',
   });
-  badge.textContent = '온라인 · 나는 P2(흑) · 내 키 설정의 P1·P2 키 모두 사용 가능';
+  badge.textContent = '온라인 · 나는 P2(흑) · 키는 오른쪽 아래 [키 설정]에서 바꿀 수 있어요';
   root.append(screen, status, badge);
   // 안내 문구. retry = true 면 '다시 시도' 버튼(새로고침)도 보여 준다
   return (text, retry = false) => {
@@ -272,11 +273,17 @@ function guestView(root, screen) {
   };
 }
 
-// 내 키·클릭을 send로 호스트에 보낸다
-function sendGuestInput(screen, send) {
+// 내 키·클릭을 send로 호스트에 보낸다. 키 설정 창이 열린 동안은 멈춘다 (root에 [키 설정] 버튼을 단다)
+function sendGuestInput(root, screen, send) {
   const held = new Set();
+  let paused = false;
+  addGuestKeys(root, {
+    onOpen: () => { for (const action of [...held]) press(action, false, 'key'); paused = true; },
+    onClose: () => { paused = false; },
+  });
   // 키보드: 내 키 설정으로 동작을 읽어 보낸다 (누르고 있는 동안 한 번만 'down')
   const press = (action, down, source) => {
+    if (down && paused) return;
     if (down === held.has(action)) return;
     if (down) held.add(action); else held.delete(action);
     send({ t: down ? 'down' : 'up', action, source });
@@ -303,6 +310,7 @@ function sendGuestInput(screen, send) {
   };
   screen.addEventListener('mousedown', (e) => {
     e.preventDefault();
+    if (paused) return;
     const at = toGame(e);
     if (at) send({ t: 'click', ...at });
     const action = actionFor(mouseCode(e.button));
@@ -346,7 +354,7 @@ export function joinRoom(code, root) {
       say('호스트 화면을 받는 중…');
     });
   });
-  sendGuestInput(video, (msg) => { if (conn?.open) conn.send(msg); });
+  sendGuestInput(root, video, (msg) => { if (conn?.open) conn.send(msg); });
 }
 
 // 같은 네트워크 방에 들어간다 (?lan=1 — 호스트 PC의 serve.py 주소로 연 페이지)
@@ -370,7 +378,7 @@ export function joinLan(root) {
 
   // 입력은 순서가 바뀌지 않게 하나씩 차례로 보낸다
   let queue = Promise.resolve();
-  sendGuestInput(img, (msg) => {
+  sendGuestInput(root, img, (msg) => {
     queue = queue.then(() => fetch(`lan/input?id=${id}`, { method: 'POST', body: JSON.stringify(msg) })).catch(() => {});
   });
 }
