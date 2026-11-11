@@ -41,6 +41,10 @@ const ERROR_TEXT = {
   'browser-incompatible': '이 브라우저는 온라인을 지원하지 않아요 (크롬 권장)',
 };
 const errorText = (err) => ERROR_TEXT[err.type] || `연결 오류 (${err.type || err.message})`;
+const NO_PEERJS = '온라인 연결 도구를 불러오지 못했어요. 페이지를 새로고침해 보세요';
+const SERVER_TIMEOUT = 10_000; // 연결 서버에 이 시간 안에 못 닿으면 실패 안내
+const JOIN_TIMEOUT = 15_000;   // 친구가 이 시간 안에 호스트 화면을 못 받으면 실패 안내
+const JOIN_FAILED = '호스트와 연결이 안 돼요.\n회사·학교 와이파이처럼 직접 연결을 막는 네트워크일 수 있어요.\n둘 중 한 명이 휴대폰 핫스팟 등 다른 네트워크로 바꿔서 다시 해보세요.';
 
 // ───────── 호스트 ─────────
 
@@ -48,8 +52,13 @@ const errorText = (err) => ERROR_TEXT[err.type] || `연결 오류 (${err.type ||
 //   onStatus({ state: 'waiting', link } | { state: 'joined' } | { state: 'left' } | { state: 'error', message })
 //   onClick({ x, y }) — 친구의 화면 클릭 (게임 좌표)
 export function hostRoom({ game, onStatus, onClick }) {
+  if (typeof Peer === 'undefined') {
+    setTimeout(() => onStatus({ state: 'error', message: NO_PEERJS }));
+    return { close() {} };
+  }
   const code = randomCode();
   const peer = new Peer(PREFIX + code);
+  const serverTimer = setTimeout(() => onStatus({ state: 'error', message: ERROR_TEXT.network }), SERVER_TIMEOUT);
   // 게임이 한 장면을 그릴 때마다 그 장면을 영상 한 프레임으로 보낸다 (최대 30fps)
   const stream = game.canvas.captureStream(0);
   const track = stream.getVideoTracks()[0];
@@ -69,8 +78,8 @@ export function hostRoom({ game, onStatus, onClick }) {
     for (const action of ['up', 'down', 'left', 'right', 'confirm', 'skill', 'cancel']) remoteInput({ action, down: false });
   };
 
-  peer.on('open', () => onStatus({ state: 'waiting', link: roomLink(code) }));
-  peer.on('error', (err) => onStatus({ state: 'error', message: errorText(err) }));
+  peer.on('open', () => { clearTimeout(serverTimer); onStatus({ state: 'waiting', link: roomLink(code) }); });
+  peer.on('error', (err) => { clearTimeout(serverTimer); onStatus({ state: 'error', message: errorText(err) }); });
   peer.on('connection', (c) => {
     if (conn) {
       c.on('open', () => { c.send({ t: 'full' }); setTimeout(() => c.close(), 500); });
@@ -100,6 +109,7 @@ export function hostRoom({ game, onStatus, onClick }) {
 
   return {
     close() {
+      clearTimeout(serverTimer);
       releaseAll();
       online.role = null;
       game.events.off('postrender', sendFrame);
@@ -155,7 +165,7 @@ export function joinRoom(code, root) {
   const status = document.createElement('div');
   Object.assign(status.style, {
     position: 'fixed', left: '50%', top: '50%', transform: 'translate(-50%, -50%)', maxWidth: 'calc(100vw - 32px)',
-    color: '#f2ead8', font: '14px Galmuri11, sans-serif', textAlign: 'center', lineHeight: '1.6',
+    color: '#f2ead8', font: '14px Galmuri11, sans-serif', textAlign: 'center', lineHeight: '1.6', whiteSpace: 'pre-line',
   });
   const badge = document.createElement('div');
   Object.assign(badge.style, {
@@ -163,24 +173,38 @@ export function joinRoom(code, root) {
   });
   badge.textContent = '온라인 · 나는 P2(흑) · 내 키 설정의 P1·P2 키 모두 사용 가능';
   root.append(video, status, badge);
-  const say = (text) => { status.textContent = text; status.style.display = text ? 'block' : 'none'; };
+  // 안내 문구. retry = true 면 '다시 시도' 버튼(새로고침)도 보여 준다
+  const say = (text, retry = false) => {
+    status.textContent = text;
+    status.style.display = text ? 'block' : 'none';
+    if (!retry) return;
+    const btn = Object.assign(document.createElement('button'), { textContent: '다시 시도' });
+    Object.assign(btn.style, { display: 'block', margin: '12px auto 0', font: 'inherit', background: '#f2ead8', color: '#111018', border: 0, padding: '6px 14px', cursor: 'pointer' });
+    btn.addEventListener('click', () => location.reload());
+    status.append(btn);
+  };
   say('방에 들어가는 중…');
+  if (typeof Peer === 'undefined') { say(NO_PEERJS, true); return; }
 
   const peer = new Peer();
   let conn = null;
   const held = new Set();
   const send = (msg) => { if (conn?.open) conn.send(msg); };
+  // 정해진 시간 안에 호스트 화면이 안 오면 (네트워크가 직접 연결을 막는 경우 등) 안내
+  const joinTimer = setTimeout(() => say(JOIN_FAILED, true), JOIN_TIMEOUT);
+  const fail = (text) => { clearTimeout(joinTimer); say(text, true); };
 
-  peer.on('error', (err) => say(errorText(err)));
+  peer.on('error', (err) => fail(errorText(err)));
   peer.on('open', () => {
     conn = peer.connect(PREFIX + code, { reliable: true });
     conn.on('open', () => say('연결됨! 호스트 화면을 기다리는 중…'));
-    conn.on('data', (msg) => { if (msg?.t === 'full') say('이미 다른 친구가 들어와 있어요'); });
-    conn.on('close', () => { video.srcObject = null; say('연결이 끊겼어요. 호스트에게 새 링크를 받아 다시 들어오세요'); });
+    conn.on('data', (msg) => { if (msg?.t === 'full') fail('이미 다른 친구가 들어와 있어요'); });
+    conn.on('close', () => { video.srcObject = null; fail('연결이 끊겼어요. 호스트에게 새 링크를 받아 다시 들어오세요'); });
   });
   peer.on('call', (call) => {
     call.answer();
     call.on('stream', (stream) => {
+      clearTimeout(joinTimer);
       video.srcObject = stream;
       video.play().catch(() => {});
       say('');

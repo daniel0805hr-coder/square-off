@@ -110,7 +110,7 @@ export class BoardScene extends Phaser.Scene {
           this.panel.show('친구 연결이 끊겼어요 — 이제 이 컴퓨터에서 P2도 조작해요');
           this.say('친구 연결이 끊겼어요');
         } else if (st.state === 'error') {
-          this.onlineText = `${st.message}\n취소 키 = 메뉴로`;
+          this.onlineText = `${st.message}\n\n2인 대전(한 컴퓨터)은 인터넷 없이도 돼요`;
           this.panel.show(st.message);
         }
         this.render();
@@ -576,10 +576,11 @@ export class BoardScene extends Phaser.Scene {
       });
     }
     if (this.mode === 'online') {
-      this.overlay.add(this.add.rectangle(320, BOARD_Y + 128, 220, 80, 0x111018, 0.94).setStrokeStyle(1, 0xf2ead8));
-      this.overlay.add(this.add.text(320, BOARD_Y + 100, '온라인 · 방 만들기', text(12, '#f2ead8')).setOrigin(0.5, 0));
-      this.overlay.add(this.add.text(320, BOARD_Y + 120, this.onlineText, { ...text(10, '#d8d2c4', FONT_SMALL), align: 'center', lineSpacing: 3 }).setOrigin(0.5, 0));
-      this.overlay.add(this.add.text(320, BOARD_Y + 152, `취소(${keyLabels(1).cancel}) = 메뉴로`, text(10, '#8d8798', FONT_SMALL)).setOrigin(0.5, 0));
+      this.overlay.add(this.add.rectangle(320, BOARD_Y + 128, 228, 124, 0x111018, 0.94).setStrokeStyle(1, 0xf2ead8));
+      this.overlay.add(this.add.text(320, BOARD_Y + 74, '온라인 · 방 만들기', text(12, '#f2ead8')).setOrigin(0.5, 0));
+      this.overlay.add(this.add.text(320, BOARD_Y + 96, this.onlineText,
+        { ...text(10, '#d8d2c4', FONT_SMALL), align: 'center', lineSpacing: 3, wordWrap: { width: 208, useAdvancedWrap: true } }).setOrigin(0.5, 0));
+      this.overlay.add(this.add.text(320, BOARD_Y + 168, `취소(${keyLabels(1).cancel}) = 메뉴로`, text(10, '#8d8798', FONT_SMALL)).setOrigin(0.5, 0));
     }
     if (this.mode === 'veteran') {
       const col = PLAYER_COLOR[this.vet.player];
