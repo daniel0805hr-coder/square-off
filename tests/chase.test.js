@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Chase, makeMaze, bfs, cellOf, cellCenter, OPEN, TREE, GAP, BLOCK } from '../src/logic/chase.js';
 import { ChaseBot } from '../src/logic/ai.js';
-import { generateMap, validHalf, KINDS, MAP_RULES } from '../src/logic/terrain.js';
+import { generateMap, validHalf, makeMap, FIXED_MAPS, KINDS, MAP_RULES } from '../src/logic/terrain.js';
 import { ChessGame, parseSquare as sq } from '../src/logic/chess.js';
 import { CHASE } from '../src/logic/balance.js';
 import { currentHp } from '../src/logic/units.js';
@@ -113,6 +113,21 @@ test('지형 생성: 대칭 · e1/e8 성채 · 종류별 10~12칸 · 3칸 넘게
       assert.ok(n >= MAP_RULES.perKind[0] && n <= MAP_RULES.perKind[1], `${k} ${n}`);
     }
   }
+});
+
+test('고정 맵: 대칭 · e1/e8 성채 · 3칸 넘게 연속 없음, 드래프트로 고쳐도 원본은 그대로', () => {
+  const letter = { arena: 'A', fortress: 'F', forest: 'W' };
+  for (const { id } of FIXED_MAPS) {
+    const m = makeMap(id);
+    for (let r = 0; r < 4; r++) assert.deepEqual(m[r], m[7 - r]);
+    assert.equal(m[7][4], 'fortress');
+    const rows = m.map((row) => row.map((k) => letter[k]).join(''));
+    const cols = [0, 1, 2, 3, 4, 5, 6, 7].map((c) => m.map((row) => letter[row[c]]).join(''));
+    for (const line of [...rows, ...cols]) assert.ok(!/(.)\1{3}/.test(line), `${id} ${line}`);
+    m[3][3] = m[3][3] === 'arena' ? 'forest' : 'arena';
+    assert.notEqual(makeMap(id)[3][3], m[3][3]);
+  }
+  assert.equal(makeMap('random').length, 8);
 });
 
 test('체스판: 추격전 승리는 HP 보상 없음', () => {

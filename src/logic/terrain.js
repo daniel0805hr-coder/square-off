@@ -88,8 +88,47 @@ function shuffle(arr, rng) {
   return arr;
 }
 
-// 혹시 생성에 실패하면 쓰는 고정 맵 (규칙을 만족함)
 const A = 'arena', F = 'fortress', W = 'forest';
+
+// 손으로 만든 고정 맵 (기획서 8장). 반쪽(1~4랭크)만 적고 위쪽은 대칭 복사. 뭉침 제한(3칸)은 지킨다
+export const FIXED_MAPS = [
+  {
+    id: 'flanks', name: '측면 숲', desc: '양 날개는 숲(추격전), 가운데는 투기장',
+    half: [
+      // a  b  c  d  e  f  g  h
+      [W, W, F, F, F, A, W, W], // 1랭크
+      [W, A, F, A, A, F, A, W], // 2랭크
+      [W, W, A, A, A, F, W, W], // 3랭크
+      [A, F, W, W, W, A, F, A], // 4랭크
+    ],
+  },
+  {
+    id: 'citadel', name: '중앙 성채', desc: '전선에 성채(턴제)가 많은 수싸움 맵',
+    half: [
+      [A, W, A, W, F, W, A, W],
+      [W, A, W, F, A, W, A, F],
+      [A, W, A, F, W, F, W, A],
+      [F, F, W, A, F, A, F, F],
+    ],
+  },
+  {
+    id: 'sands', name: '모래 평원', desc: '투기장(탑다운 액션)이 많은 난타전 맵',
+    half: [
+      [A, A, W, A, F, A, W, A],
+      [F, A, W, A, A, W, A, F],
+      [A, W, F, F, A, F, A, W],
+      [W, F, A, W, F, W, F, A],
+    ],
+  },
+];
+
+// 맵 설정 → 지형 판. 'random' = 대칭 랜덤, 그 밖에는 고정 맵 id
+export function makeMap(id = 'random', rng = Math.random) {
+  const fixed = FIXED_MAPS.find((m) => m.id === id);
+  return fixed ? mirror(fixed.half) : generateMap(rng);
+}
+
+// 혹시 생성에 실패하면 쓰는 고정 맵 (규칙을 만족함)
 const FALLBACK = [
   // a  b  c  d  e  f  g  h
   [A, W, W, W, F, W, A, W], // 1랭크

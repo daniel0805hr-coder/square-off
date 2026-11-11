@@ -1,15 +1,17 @@
-import { InputRouter, ACTIONS, ACTION_NAMES, actionLabel, setBinding, resetBindings, mouseCode } from '../input/controls.js';
+import { InputRouter, ACTIONS, ACTION_NAMES, actionLabel, padLabel, setBinding, resetBindings, mouseCode } from '../input/controls.js';
 import { FONT_SMALL, FONT_BIG, text, C, PLAYER_COLOR, PLAYER_HEX } from '../ui/style.js';
 import { UI, UI_HEX, drawPanel } from '../ui/frame.js';
 
-const COL_X = { 1: 110, 2: 340 }; // 각 플레이어 칸의 왼쪽 끝
-const COL_W = 190;
+const COL_X = { 1: 75, 2: 335 }; // 각 플레이어 칸의 왼쪽 끝
+const COL_W = 230;
+const PAD_W = 56; // 칸 오른쪽의 패드 버튼 자리
 const ROW_Y = 66;
 const ROW_H = 18;
 const BUTTONS = ['기본값으로', '돌아가기']; // 마지막 줄 (왼쪽 / 오른쪽)
 const BUTTON_ROW = ACTIONS.length;
 
-// 키 설정 화면. 칸을 고르고 선택 키를 누른 뒤, 새로 쓸 키(또는 마우스 버튼)를 누르면 바뀐다.
+// 키 설정 화면. 칸을 고르고 선택 키를 누른 뒤, 새로 쓸 키(또는 마우스·패드 버튼)를 누르면 바뀐다.
+// 키를 누르면 키가, 패드 버튼을 누르면 패드 버튼이 바뀐다 (한 동작에 키 하나 + 패드 버튼 하나)
 export class KeyConfigScene extends Phaser.Scene {
   constructor() {
     super('keys');
@@ -30,6 +32,8 @@ export class KeyConfigScene extends Phaser.Scene {
     bg.fillStyle(UI.gold).fillRect(262, 19, 22, 1).fillRect(356, 19, 22, 1);
     for (const p of [1, 2]) {
       this.add.text(COL_X[p] + COL_W / 2, 42, `P${p}`, text(12, PLAYER_HEX[p])).setOrigin(0.5, 0);
+      this.add.text(COL_X[p] + COL_W - 8, 44, '패드', text(10, UI_HEX.muted, FONT_SMALL)).setOrigin(1, 0);
+      this.add.text(COL_X[p] + COL_W - PAD_W - 8, 44, '키', text(10, UI_HEX.muted, FONT_SMALL)).setOrigin(1, 0);
     }
     this.help = this.add.text(320, 326, '', text(10, UI_HEX.muted, FONT_SMALL)).setOrigin(0.5, 0);
     this.gfx = this.add.graphics();
@@ -141,8 +145,12 @@ export class KeyConfigScene extends Phaser.Scene {
         g.fillStyle(on ? 0x3a3746 : C.panel).fillRect(x, y - 4, COL_W, ROW_H - 4);
         if (on) g.lineStyle(2, PLAYER_COLOR[p]).strokeRect(x + 1, y - 3, COL_W - 2, ROW_H - 6);
         add(x + 8, y, ACTION_NAMES[action], text(10, '#8d8798', FONT_SMALL));
-        const label = on && this.listening ? '키를 누르세요…' : actionLabel(p, action);
-        add(x + COL_W - 8, y - 1, label, text(12, on && this.listening ? '#ffe08a' : '#f2ead8')).setOrigin(1, 0);
+        if (on && this.listening) {
+          add(x + COL_W - 8, y - 1, '키나 패드 버튼을 누르세요…', text(12, '#ffe08a')).setOrigin(1, 0);
+        } else {
+          add(x + COL_W - PAD_W - 8, y - 1, actionLabel(p, action), text(12, '#f2ead8')).setOrigin(1, 0);
+          add(x + COL_W - 8, y + 1, padLabel(p, action, true), text(10, '#b8b0c8', FONT_SMALL)).setOrigin(1, 0);
+        }
       }
     });
     BUTTONS.forEach((label, col) => {
@@ -154,7 +162,7 @@ export class KeyConfigScene extends Phaser.Scene {
     });
 
     this.help.setText(this.listening
-      ? '새 키·마우스 버튼을 누르세요 (마우스 왼쪽은 이 칸을 클릭) · Esc = 취소 · 겹치면 서로 바뀜'
-      : '이동 = 아무 플레이어의 이동 키 · 선택 키 = 바꾸기 · 취소 키 / Esc = 돌아가기 · 마우스 클릭도 가능');
+      ? '새 키·마우스·패드 버튼을 누르세요 (마우스 왼쪽은 이 칸을 클릭) · Esc = 취소 · 겹치면 서로 바뀜'
+      : '이동 = 아무 플레이어의 이동 키 · 선택 키 = 바꾸기 · 취소 키 / Esc = 돌아가기 · 패드는 P1 = 패드1, P2 = 패드2');
   }
 }

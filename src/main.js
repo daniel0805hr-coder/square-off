@@ -3,6 +3,7 @@ import { BattleScene } from './scenes/BattleScene.js';
 import { KeyConfigScene } from './scenes/KeyConfigScene.js';
 import { TurnBattleScene } from './scenes/TurnBattleScene.js';
 import { ChaseScene } from './scenes/ChaseScene.js';
+import { startGamepads } from './input/gamepad.js';
 
 // 폰트가 로드된 뒤에 게임을 시작해야 글자가 기본 폰트로 그려지지 않는다
 await Promise.all([
@@ -13,6 +14,7 @@ await Promise.all([
 // 링크로 들어온 친구는 게임을 돌리지 않고 호스트 화면을 받아 본다 (src/net/online.js)
 //   ?room=코드 = 인터넷 링크 방, ?lan=1 = 같은 네트워크(LAN·VPN) 방
 const params = new URLSearchParams(location.search);
+startGamepads(); // 패드 버튼 → 키 입력 (호스트·친구 화면 모두)
 if (params.has('room')) {
   const { joinRoom } = await import('./net/online.js');
   joinRoom(params.get('room'), document.getElementById('game'));

@@ -2,6 +2,9 @@
 // 키 배치는 키 설정 화면에서 바꿀 수 있고, 브라우저(localStorage)에 저장된다.
 // 'key:x' = 키 위치(code)가 아니라 입력된 글자로 인식 (code가 비어 오는 환경 대비)
 // 'Mouse0'~'Mouse4' = 마우스 버튼 (왼쪽, 가운데, 오른쪽, 뒤로, 앞으로)
+// 'Pad1:B0' = 게임패드 버튼 (gamepad.js). 동작마다 키(키보드·마우스) 하나와 패드 버튼 하나를 따로 가진다
+
+import { padCode, padName, padSlotConnected } from './gamepad.js';
 
 export const ACTIONS = ['up', 'down', 'left', 'right', 'confirm', 'skill', 'cancel', 'turnAttack', 'turnDefend', 'turnSkill', 'turnFocus', 'turnHeal'];
 // confirm = 체스판에서 선택 / 전투에서 공격, skill = 전투에서 기물별 특수기, cancel = 체스판·메뉴에서 취소
@@ -11,7 +14,15 @@ export const ACTION_NAMES = {
   turnAttack: '턴제 공격', turnDefend: '턴제 방어', turnSkill: '턴제 스킬', turnFocus: '턴제 집중', turnHeal: '턴제 회복',
 };
 
-export const DEFAULT_BINDINGS = {
+// 패드 기본 배치 (P1 = 패드1, P2 = 패드2): 십자키·왼쪽 스틱 이동, A 선택, X 스킬, B 취소,
+// 턴제 = Y 공격 · RB 방어 · LB 스킬 · RT 집중 · LT 회복
+const PAD_DEFAULT = {
+  up: 12, down: 13, left: 14, right: 15, confirm: 0, skill: 2, cancel: 1,
+  turnAttack: 3, turnDefend: 5, turnSkill: 4, turnFocus: 7, turnHeal: 6,
+};
+export const isPad = (code) => code.startsWith('Pad');
+
+const KEY_DEFAULTS = {
   1: {
     up: ['KeyW'], down: ['KeyS'], left: ['KeyA'], right: ['KeyD'],
     confirm: ['KeyF'], skill: ['KeyG'], cancel: ['KeyQ'],
@@ -23,6 +34,9 @@ export const DEFAULT_BINDINGS = {
     turnAttack: ['Numpad4', 'KeyJ'], turnDefend: ['Numpad5', 'KeyK'], turnSkill: ['Numpad6', 'KeyL'], turnFocus: ['Numpad7', 'KeyU'], turnHeal: ['Numpad8', 'KeyI'],
   },
 };
+const padDefaults = (player) => Object.fromEntries(ACTIONS.map((a) => [a, [padCode(player, PAD_DEFAULT[a])]]));
+export const DEFAULT_BINDINGS = Object.fromEntries([1, 2].map((p) => [p,
+  Object.fromEntries(ACTIONS.map((a) => [a, [...KEY_DEFAULTS[p][a], ...padDefaults(p)[a]]]))]));
 
 const STORAGE_KEY = 'squareoff.keys.v1';
 const clone = (b) => JSON.parse(JSON.stringify(b));
@@ -33,7 +47,7 @@ let version = 0; // 키 배치가 바뀔 때마다 증가 → 입력기가 다�
 function loadBindings() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (saved && [1, 2].every((p) => ACTIONS.every((a) => Array.isArray(saved[p]?.[a])))) return saved;
+    if (saved && [1, 2].every((p) => ACTIONS.every((a) => Array.isArray(saved[p]?.[a])))) return withPads(saved);
     // 스킬 키가 따로 없던 예전 저장값: 예전 '취소' 키가 스킬 역할이었으므로 스킬로 옮기고, 취소는 기본값
     if (saved && [1, 2].every((p) => Array.isArray(saved[p]?.cancel) && !saved[p].skill)) {
       for (const p of [1, 2]) saved[p].skill = saved[p].cancel;
@@ -48,10 +62,17 @@ function loadBindings() {
           if (!Array.isArray(saved[p][a])) saved[p][a] = DEFAULT_BINDINGS[p][a].filter((c) => !used.has(c));
         }
       }
-      return saved;
+      return withPads(saved);
     }
   } catch { /* 저장소를 못 쓰는 환경이면 기본값 */ }
   return clone(DEFAULT_BINDINGS);
+}
+
+// 패드 지원 전에 저장된 배치면 패드 기본 버튼을 붙인다
+function withPads(saved) {
+  if ([1, 2].some((p) => Object.values(saved[p]).flat().some(isPad))) return saved;
+  for (const p of [1, 2]) for (const a of ACTIONS) saved[p][a].push(...padDefaults(p)[a]);
+  return saved;
 }
 
 function saveBindings() {
@@ -60,15 +81,20 @@ function saveBindings() {
 
 export const getBindings = () => bindings;
 
-// player의 action에 키 하나를 지정. 다른 동작이 쓰던 키면 서로 맞바꾼다.
+// player의 action에 키(또는 패드 버튼) 하나를 지정. 다른 동작이 쓰던 키면 서로 맞바꾼다.
+// 키를 바꾸면 패드 버튼은 그대로, 패드 버튼을 바꾸면 키는 그대로 둔다
 export function setBinding(player, action, code) {
-  const previous = bindings[player][action];
+  const kind = isPad(code);
+  const same = (c) => isPad(c) === kind;
+  const previous = bindings[player][action].filter(same);
   for (const p of [1, 2]) {
     for (const a of ACTIONS) {
-      if ((p !== player || a !== action) && bindings[p][a].includes(code)) bindings[p][a] = previous;
+      if ((p !== player || a !== action) && bindings[p][a].includes(code)) {
+        bindings[p][a] = [...bindings[p][a].filter((c) => !same(c)), ...previous];
+      }
     }
   }
-  bindings[player][action] = [code];
+  bindings[player][action] = [...bindings[player][action].filter((c) => !same(c)), code];
   version++;
   saveBindings();
 }
@@ -95,6 +121,7 @@ export const mouseCode = (button) => `Mouse${button}`;
 export const isMouseBound = (button) => [1, 2].some((p) => Object.values(bindings[p]).some((codes) => codes.includes(mouseCode(button))));
 export function keyName(code) {
   if (NAMED[code]) return NAMED[code];
+  if (isPad(code)) return padName(code) ?? code;
   if (code.startsWith('key:')) return code.slice(4);
   if (code.startsWith('Key')) return code.slice(3);
   if (code.startsWith('Digit')) return code.slice(5);
@@ -104,15 +131,39 @@ export function keyName(code) {
 
 // 한 동작의 키 이름 ('key:' 대체 항목은 같은 키라 숨긴다)
 export function actionLabel(player, action) {
-  const codes = bindings[player][action].filter((c) => !c.startsWith('key:'));
-  return (codes.length ? codes : bindings[player][action]).map(keyName).join('·') || '없음';
+  const keys = bindings[player][action].filter((c) => !isPad(c));
+  const codes = keys.filter((c) => !c.startsWith('key:'));
+  return (codes.length ? codes : keys).map(keyName).join('·') || '없음';
+}
+
+// 한 동작의 패드 버튼 이름 (short = 자기 번호 패드(P1 = 패드1)면 '패드1 ' 없이 버튼만)
+export function padLabel(player, action, short = false) {
+  const names = bindings[player][action].filter(isPad).map((c) => (short ? padName(c).replace(`패드${player} `, '') : padName(c)));
+  return names.join('·') || '없음';
+}
+
+// 이 플레이어에게 지정된 패드가 지금 연결돼 있는가 (그러면 도움말에 패드 버튼을 보여 준다)
+export function usesPad(player) {
+  return Object.values(bindings[player]).flat().filter(isPad).some((c) => padSlotConnected(Number(/^Pad(\d+)/.exec(c)[1])));
 }
 
 // 화면 도움말용 요약
 export function keyLabels(player) {
   const b = bindings[player];
+  if (usesPad(player)) {
+    const pad = (a) => padLabel(player, a, true);
+    const dpad = ['up', 'down', 'left', 'right'].every((a, i) => b[a].some((c) => c.endsWith(`:B${12 + i}`)));
+    return {
+      move: dpad ? '십자키·스틱' : ['up', 'left', 'down', 'right'].map(pad).join(' '),
+      confirm: pad('confirm'),
+      skill: pad('skill'),
+      cancel: pad('cancel'),
+      turn: ['turnAttack', 'turnDefend', 'turnSkill', 'turnFocus', 'turnHeal'].map(pad),
+    };
+  }
+  const keyOnly = (a) => b[a].filter((c) => !isPad(c));
   const arrows = ['ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight'];
-  const isArrows = ['up', 'left', 'down', 'right'].every((a, i) => b[a].length === 1 && b[a][0] === arrows[i]);
+  const isArrows = ['up', 'left', 'down', 'right'].every((a, i) => keyOnly(a).length === 1 && keyOnly(a)[0] === arrows[i]);
   return {
     move: isArrows ? '방향키' : ['up', 'left', 'down', 'right'].map((a) => actionLabel(player, a)).join(' '),
     confirm: actionLabel(player, 'confirm'),

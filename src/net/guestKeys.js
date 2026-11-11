@@ -1,7 +1,7 @@
 // 온라인 친구 화면의 키 설정 창. 친구 화면은 게임(Phaser)을 돌리지 않으므로 키 설정 화면을 HTML로 따로 만든다.
 // 바꾼 키는 친구 브라우저에 저장되고(controls.js와 같은 저장소), 키 1·키 2 모두 친구(P2) 조작이 된다.
 
-import { ACTIONS, ACTION_NAMES, actionLabel, setBinding, resetBindings, mouseCode } from '../input/controls.js';
+import { ACTIONS, ACTION_NAMES, actionLabel, padLabel, setBinding, resetBindings, mouseCode } from '../input/controls.js';
 
 const COLORS = { bg: '#1b1a24', line: '#4a4658', text: '#f2ead8', dim: '#8d8798', on: '#ffe08a', field: '#111018' };
 const font = (size) => `${size}px Galmuri11, sans-serif`;
@@ -33,8 +33,8 @@ export function addGuestKeys(root, { onOpen, onClose }) {
     Object.assign(title.style, { font: font(14), textAlign: 'center', marginBottom: '4px' });
     const sub = Object.assign(document.createElement('div'), {
       textContent: listening
-        ? '새 키·마우스 버튼을 누르세요 (마우스 왼쪽은 이 칸을 클릭) · Esc = 취소'
-        : '칸을 눌러 바꾸기 · 키 1·키 2 둘 다 내 조작 · 겹치면 서로 바뀜',
+        ? '새 키·마우스·패드 버튼을 누르세요 (마우스 왼쪽은 이 칸을 클릭) · Esc = 취소'
+        : '칸을 눌러 바꾸기 · 키 1·키 2 둘 다 내 조작 · 겹치면 서로 바뀜 · 패드는 키 1 = 패드1',
     });
     Object.assign(sub.style, { font: font(10), color: listening ? COLORS.on : COLORS.dim, textAlign: 'center', marginBottom: '10px' });
     panel.append(title, sub);
@@ -49,6 +49,11 @@ export function addGuestKeys(root, { onOpen, onClose }) {
       for (const player of [1, 2]) {
         const on = listening?.player === player && listening?.action === action;
         const cell = Object.assign(document.createElement('button'), { textContent: on ? '키를 누르세요…' : actionLabel(player, action) });
+        if (!on) {
+          const pad = Object.assign(document.createElement('span'), { textContent: ` / ${padLabel(player, action, true)}` });
+          pad.style.color = COLORS.dim;
+          cell.append(pad);
+        }
         cell.dataset.player = player;
         cell.dataset.action = action;
         Object.assign(cell.style, {

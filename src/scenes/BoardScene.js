@@ -4,7 +4,7 @@ import { hostRoom, HostPanel } from '../net/online.js';
 import { chooseChessMove, BOT_LEVELS } from '../logic/ai.js';
 import { BOARD } from '../logic/balance.js';
 import { maxHp, currentHp, attackStat } from '../logic/units.js';
-import { TERRAIN } from '../logic/terrain.js';
+import { TERRAIN, KINDS, FIXED_MAPS, makeMap } from '../logic/terrain.js';
 import { FONT_SMALL, FONT_BIG, text, C, PLAYER_OF, COLOR_OF, PLAYER_COLOR, PLAYER_HEX, SIDE_NAME, makePiece } from '../ui/style.js';
 import { FxLayer, FX, RAMP, NO_BODY } from '../ui/pixelfx.js';
 import { UI, UI_HEX, drawPanel, corners, windowAt, drawSelectBar } from '../ui/frame.js';
@@ -13,8 +13,30 @@ const TILE = 32;
 const BOARD_X = 192;
 const BOARD_Y = 60;
 
-// 시작 메뉴. ai = P2(흑)를 컴퓨터가 맡을 때의 난이도
+// 규칙 설정 (기획서 8·10장 옵션). 메뉴 위쪽 줄에서 왼쪽/오른쪽(또는 선택 키)으로 바꾸고, 브라우저에 저장한다
+const MAP_CHOICES = [{ id: 'random', name: '대칭 랜덤', desc: '게임마다 새로 만드는 대칭 맵' }, ...FIXED_MAPS];
+const DRAFT_PICKS = 3; // 드래프트: 시작 전에 각자 바꾸는 칸 수
+const OPTIONS = {
+  map: { label: '맵', values: MAP_CHOICES.map((m) => m.id), show: (v) => MAP_CHOICES.find((m) => m.id === v).name },
+  draft: { label: '드래프트', values: [false, true], show: (v) => (v ? `각자 ${DRAFT_PICKS}칸 바꾸기` : '끔') },
+  timer: { label: '제한시간', values: [0, 30, 60], show: (v) => (v ? `한 수 ${v}초` : '없음') },
+};
+const RULES_KEY = 'squareoff.rules.v1';
+
+function loadRules() {
+  const rules = { map: 'random', draft: false, timer: 0 };
+  try {
+    const saved = JSON.parse(localStorage.getItem(RULES_KEY));
+    for (const key of Object.keys(rules)) if (OPTIONS[key].values.includes(saved?.[key])) rules[key] = saved[key];
+  } catch { /* 저장소를 못 쓰면 기본값 */ }
+  return rules;
+}
+
+// 시작 메뉴. option = 규칙 설정 줄, ai = P2(흑)를 컴퓨터가 맡을 때의 난이도
 const MENU = [
+  { option: 'map' },
+  { option: 'draft' },
+  { option: 'timer' },
   { label: '2인 대전', ai: null },
   { label: '컴퓨터 상대 · 쉬움', ai: 'easy' },
   { label: '컴퓨터 상대 · 보통', ai: 'normal' },
@@ -22,6 +44,7 @@ const MENU = [
   { label: '온라인 · 같은 네트워크(VPN) 방', online: 'lan' },
   { label: '키 설정', keys: true },
 ];
+const OPTION_ROWS = MENU.filter((m) => m.option).length;
 const AI_PLAYER = 2;
 const TERRAIN_COLOR = {
   arena: { light: 0xe2c992, dark: 0xb48f55, mark: 0x7a5a2a },    // 투기장: 모래
@@ -41,6 +64,7 @@ export class BoardScene extends Phaser.Scene {
   }
 
   create() {
+    this.rules = loadRules();
     this.chess = new ChessGame();
     this.newGame();
 
@@ -60,10 +84,13 @@ export class BoardScene extends Phaser.Scene {
 
   newGame() {
     this.chess.reset();
+    this.chess.terrain = makeMap(this.rules.map);
     this.cursor = { 1: { r: 6, c: 4 }, 2: { r: 1, c: 4 } };
     this.selected = null;
-    this.mode = 'menu'; // menu | online | select | promotion | battle | veteran | over
-    this.menuIndex ??= 0;
+    this.mode = 'menu'; // menu | online | draft | select | promotion | battle | veteran | over
+    this.menuIndex ??= OPTION_ROWS; // 처음엔 '2인 대전'
+    this.draft = null;
+    this.clock = null; // 이번 수에 남은 시간(ms). 제한시간 없으면 null
     this.ai = null;
     this.aiTimer?.remove();
     this.promo = null; // { from, to, index }
@@ -71,7 +98,9 @@ export class BoardScene extends Phaser.Scene {
   }
 
   chooseMenu(i) {
-    if (MENU[i].online) {
+    if (MENU[i].option) {
+      this.changeOption(MENU[i].option, 1);
+    } else if (MENU[i].online) {
       this.openRoom(MENU[i].online);
     } else if (MENU[i].keys) {
       this.scene.launch('keys');
@@ -81,11 +110,147 @@ export class BoardScene extends Phaser.Scene {
     }
   }
 
+  // 규칙 하나를 다음(dir = 1) / 이전(-1) 값으로. 맵을 바꾸면 메뉴 뒤 판에 바로 보인다
+  changeOption(key, dir) {
+    const { values } = OPTIONS[key];
+    const i = values.indexOf(this.rules[key]);
+    this.rules[key] = values[(i + dir + values.length) % values.length];
+    try { localStorage.setItem(RULES_KEY, JSON.stringify(this.rules)); } catch { /* 무시 */ }
+    if (key === 'map') this.chess.terrain = makeMap(this.rules.map);
+    this.render();
+  }
+
   startGame(ai) {
     this.ai = ai;
+    if (this.rules.draft) this.startDraft();
+    else this.beginPlay();
+  }
+
+  beginPlay() {
     this.mode = 'select';
+    this.startClock();
     this.render();
     this.maybeAiTurn();
+  }
+
+  // ───────── 드래프트 (기획서 8장): 시작 전에 P1부터 번갈아 한 칸씩, 각자 3칸의 지형을 바꾼다 ─────────
+  //   킹 시작 칸(e1·e8)은 성채 고정이라 못 바꾼다. 취소 키 = 남은 칸을 안 바꾸고 넘김
+
+  startDraft() {
+    this.mode = 'draft';
+    this.draft = { player: 1, left: { 1: DRAFT_PICKS, 2: DRAFT_PICKS }, pick: null, changed: [] };
+    this.render();
+    this.maybeAiDraft();
+  }
+
+  canDraft({ r, c }) {
+    return c !== 4 || (r !== 0 && r !== 7);
+  }
+
+  // 칸을 고르면 바꿀 지형(지금 것 말고 두 가지) 선택 창을 연다
+  openDraftPick(sq) {
+    if (!this.canDraft(sq)) { this.say('킹 시작 칸은 성채로 고정이에요'); return; }
+    const now = this.chess.terrainAt(sq);
+    this.draft.pick = { sq, kinds: KINDS.filter((k) => k !== now), index: 0 };
+  }
+
+  applyDraft(kind) {
+    const d = this.draft;
+    const { sq } = d.pick;
+    this.chess.terrain[sq.r][sq.c] = kind;
+    d.changed.push(sq);
+    d.left[d.player]--;
+    d.pick = null;
+    this.fxAt(FX.collectBurst, sq, { palette: RAMP.gold }, 33);
+    this.nextDraft();
+  }
+
+  // 다음 사람 차례 (상대가 다 썼으면 계속 나, 둘 다 다 썼으면 대전 시작)
+  nextDraft() {
+    const d = this.draft;
+    const other = 3 - d.player;
+    if (d.left[other] > 0) d.player = other;
+    else if (d.left[d.player] <= 0) {
+      this.say('드래프트 끝! 백(P1)부터 시작');
+      this.beginPlay();
+      return;
+    }
+    this.render();
+    this.maybeAiDraft();
+  }
+
+  onDraftCommand(action) {
+    const d = this.draft;
+    const cur = this.cursor[d.player];
+    if (d.pick) {
+      if (DIRS[action]) d.pick.index = 1 - d.pick.index;
+      if (action === 'confirm') this.applyDraft(d.pick.kinds[d.pick.index]);
+      if (action === 'cancel') d.pick = null;
+      return;
+    }
+    if (DIRS[action]) {
+      const [dr, dc] = DIRS[action];
+      cur.r = Phaser.Math.Clamp(cur.r + dr, 0, 7);
+      cur.c = Phaser.Math.Clamp(cur.c + dc, 0, 7);
+    } else if (action === 'confirm') {
+      this.openDraftPick({ ...cur });
+    } else if (action === 'cancel') {
+      d.left[d.player] = 0;
+      this.say(`P${d.player} 남은 칸은 그대로 두기`);
+      this.nextDraft();
+    }
+  }
+
+  // 컴퓨터: 내 진영(5~8랭크) 아무 칸이나 하나 골라 바꾼다
+  maybeAiDraft() {
+    if (this.mode !== 'draft' || !this.isAi(this.draft.player)) return;
+    this.aiTimer = this.time.delayedCall(500, () => {
+      const squares = [];
+      for (let r = 0; r < 4; r++) for (let c = 0; c < 8; c++) if (this.canDraft({ r, c })) squares.push({ r, c });
+      const sq = Phaser.Utils.Array.GetRandom(squares);
+      this.cursor[AI_PLAYER] = sq;
+      this.openDraftPick(sq);
+      this.render();
+      this.aiTimer = this.time.delayedCall(400, () => this.applyDraft(Phaser.Utils.Array.GetRandom(this.draft.pick.kinds)));
+    });
+  }
+
+  draftKindX(i) {
+    return 320 - 42 + i * 84;
+  }
+
+  draftPopupY() {
+    return this.draft.pick.sq.r >= 4 ? BOARD_Y + 64 : BOARD_Y + 192; // 고른 칸을 가리지 않게
+  }
+
+  // ───────── 체스 턴 제한시간 (기획서 10장 옵션) ─────────
+  //   사람 차례마다 새로 잰다. 다 되면 컴퓨터가 대신 한 수 둔다 (전투·승격 고르기 중에는 멈춤)
+
+  startClock() {
+    this.clock = this.rules.timer && !this.isAi(this.currentPlayer) ? this.rules.timer * 1000 : null;
+  }
+
+  update(_time, delta) {
+    if (this.clock === null || !['select', 'promotion'].includes(this.mode)) return;
+    const shown = Math.ceil(this.clock / 1000);
+    this.clock -= delta;
+    if (this.clock <= 0) {
+      this.clock = null;
+      this.timeUp();
+      this.render();
+    } else if (Math.ceil(this.clock / 1000) !== shown) {
+      this.renderPanels();
+    }
+  }
+
+  timeUp() {
+    this.say(`시간 초과! ${SIDE_NAME[this.chess.turn]} 수는 컴퓨터가 대신 둠`);
+    if (this.mode === 'promotion') {
+      this.commitMove(this.promo.from, this.promo.to, PROMOTION_TYPES[this.promo.index]);
+      return;
+    }
+    const m = chooseChessMove(this.chess);
+    if (m) this.commitMove(m.from, m.to, 'Q');
   }
 
   // 온라인 방 만들기: 링크를 보여주고 친구를 기다린다. 친구가 들어오면 바로 2인 대전 (친구 = P2)
@@ -177,8 +342,10 @@ export class BoardScene extends Phaser.Scene {
     }
     if (this.mode === 'menu' && remote) return; // 메뉴는 호스트만
     if (this.mode === 'menu') {
+      const option = MENU[this.menuIndex].option;
       if (action === 'up') this.menuIndex = (this.menuIndex + MENU.length - 1) % MENU.length;
       if (action === 'down') this.menuIndex = (this.menuIndex + 1) % MENU.length;
+      if (option && (action === 'left' || action === 'right')) { this.changeOption(option, action === 'left' ? -1 : 1); return; }
       if (action === 'confirm') { this.chooseMenu(this.menuIndex); return; }
       this.render();
       return;
@@ -191,6 +358,12 @@ export class BoardScene extends Phaser.Scene {
       if (player !== this.vet.player || !this.ownedBy(who, player)) return;
       if (DIRS[action]) this.vet.index = 1 - this.vet.index;
       if (action === 'confirm') this.chooseVeteran(VETERAN_CHOICES[this.vet.index].key);
+      this.render();
+      return;
+    }
+    if (this.mode === 'draft') {
+      if (player !== this.draft.player || this.isAi(player) || !this.ownedBy(who, player)) return;
+      this.onDraftCommand(action);
       this.render();
       return;
     }
@@ -234,6 +407,20 @@ export class BoardScene extends Phaser.Scene {
       if (this.isAi(this.vet.player) || (online.role === 'host' && !this.ownedBy(who, this.vet.player))) return;
       const i = VETERAN_CHOICES.findIndex((_, j) => Math.abs(pointer.x - this.vetX(j)) <= 40 && Math.abs(pointer.y - (BOARD_Y + 140)) <= 16);
       if (i >= 0) { this.chooseVeteran(VETERAN_CHOICES[i].key); this.render(); }
+      return;
+    }
+    if (this.mode === 'draft') {
+      const d = this.draft;
+      if (this.isAi(d.player) || (online.role === 'host' && !this.ownedBy(who, d.player))) return;
+      const i = d.pick && Math.abs(pointer.y - this.draftPopupY() - 6) <= 26
+        ? d.pick.kinds.findIndex((_, j) => Math.abs(pointer.x - this.draftKindX(j)) <= 36) : -1;
+      if (i >= 0) this.applyDraft(d.pick.kinds[i]);
+      else if (r >= 0 && r <= 7 && c >= 0 && c <= 7) {
+        this.cursor[d.player] = { r, c };
+        d.pick = null;
+        this.openDraftPick({ r, c });
+      } else d.pick = null;
+      this.render();
       return;
     }
     if (this.isAi(this.currentPlayer)) return;
@@ -309,7 +496,10 @@ export class BoardScene extends Phaser.Scene {
     const won = this.chess.result?.winner;
     if (won) this.fx.play(FX.confetti, { x: 320, y: BOARD_Y + 200 });
     if (this.chess.duel) this.startDuel();
-    else this.maybeAiTurn();
+    else {
+      this.startClock();
+      this.maybeAiTurn();
+    }
   }
 
   chooseVeteran(choice) {
@@ -502,10 +692,13 @@ export class BoardScene extends Phaser.Scene {
       if (m.captured) gfx.lineStyle(3, C.dot, 0.55).strokeCircle(x, y, 14);
       else gfx.fillStyle(C.dot, 0.45).fillCircle(x, y, 4);
     }
+    // 드래프트로 바뀐 칸
+    for (const sq of this.draft?.changed || []) this.markTile(gfx, sq, C.gold, 0.25);
     // 커서 (차례인 플레이어만)
-    if (this.mode === 'select') {
-      const cur = this.cursor[player];
-      gfx.lineStyle(2, PLAYER_COLOR[player]).strokeRect(BOARD_X + cur.c * TILE + 1, BOARD_Y + cur.r * TILE + 1, TILE - 2, TILE - 2);
+    if (this.mode === 'select' || this.mode === 'draft') {
+      const p = this.mode === 'draft' ? this.draft.player : player;
+      const cur = this.cursor[p];
+      gfx.lineStyle(2, PLAYER_COLOR[p]).strokeRect(BOARD_X + cur.c * TILE + 1, BOARD_Y + cur.r * TILE + 1, TILE - 2, TILE - 2);
     }
 
     // 말
@@ -639,8 +832,9 @@ export class BoardScene extends Phaser.Scene {
     for (const player of [1, 2]) {
       const color = COLOR_OF[player];
       const t = this.panelTexts[player];
-      const active = this.mode !== 'over' && g.turn === color;
-      t.turn.setText(active && this.mode !== 'menu' ? '차례' : '');
+      const active = this.mode === 'draft' ? this.draft.player === player : this.mode !== 'over' && g.turn === color;
+      const clock = active && this.clock !== null && this.mode !== 'draft' ? ` ${Math.ceil(this.clock / 1000)}초` : '';
+      t.turn.setText(active && this.mode !== 'menu' ? `차례${clock}` : '').setColor(clock && this.clock <= 5000 ? '#ff6a5a' : PLAYER_HEX[player]);
       const keys = keyLabels(player);
       t.keys.setText(online.role === 'host' && player === 2 ? '온라인 친구가 조종\n(친구 자기 키 설정 사용)'
         : this.isAi(player) ? `컴퓨터가 조종\n난이도: ${BOT_LEVELS[this.ai].name}`
@@ -652,7 +846,7 @@ export class BoardScene extends Phaser.Scene {
       const mine = g.history.filter((m) => m.piece.color === color).slice(-3);
       t.log.setText(mine.map((m) => m.notation).join('\n'));
       const shield = `킹 실드: ${g.shieldUsed[color] ? '사용함' : '1회 남음'}`;
-      const look = active && this.mode === 'select' ? this.pieceInfo(this.cursor[player]) : '';
+      const look = active && (this.mode === 'select' || this.mode === 'draft') ? this.pieceInfo(this.cursor[player]) : '';
       t.info.setText(look ? `${look}\n${shield}` : shield);
       if (active && this.mode !== 'menu') {
         const x = player === 1 ? 12 : 468;
@@ -663,7 +857,18 @@ export class BoardScene extends Phaser.Scene {
 
     let status;
     if (this.flash) status = this.flash;
-    else if (this.mode === 'menu') status = '모드를 고르세요 (위/아래 + 선택 키)';
+    else if (this.mode === 'menu') {
+      const option = MENU[this.menuIndex].option;
+      status = option === 'map' ? MAP_CHOICES.find((m) => m.id === this.rules.map).desc
+        : option === 'draft' ? '시작 전에 각자 칸 3개의 지형을 바꿔요 (킹 칸 제외)'
+        : option === 'timer' ? '시간이 다 되면 컴퓨터가 대신 한 수 둬요'
+        : '모드를 고르세요 (위/아래 + 선택 키 · 규칙은 왼쪽/오른쪽)';
+    }
+    else if (this.mode === 'draft') {
+      const d = this.draft;
+      status = d.pick ? '바꿀 지형을 고르세요 (취소 = 다른 칸)'
+        : `P${d.player} 드래프트: 바꿀 칸을 고르세요 · 남은 ${d.left[d.player]}칸 · 취소 = 그만 바꾸기`;
+    }
     else if (this.mode === 'online') status = '친구가 링크로 들어오면 바로 시작해요';
     else if (this.mode === 'promotion') status = '승급할 말을 고르세요';
     else if (this.mode === 'veteran') status = `P${this.vet.player} 베테랑 승격! 보너스를 고르세요`;
@@ -676,12 +881,30 @@ export class BoardScene extends Phaser.Scene {
     this.overlay.removeAll(true);
     const g = this.chess;
     if (this.mode === 'menu') {
-      const top = this.menuY(0) - 20, bottom = this.menuY(MENU.length - 1) + 20;
+      const top = this.menuY(0) - 18, bottom = this.menuY(MENU.length - 1) + 18;
       this.overlay.add(windowAt(this, 320, (top + bottom) / 2, 236, bottom - top));
+      this.overlay.add(this.add.rectangle(320, this.menuY(OPTION_ROWS) - 14, 200, 1, UI.rule));
       this.overlay.add(drawSelectBar(this.add.graphics(), 320, this.menuY(this.menuIndex), 216));
       MENU.forEach((item, i) => {
         const on = i === this.menuIndex;
+        if (item.option) {
+          // 규칙 줄: 왼쪽 이름 + 오른쪽 값 (고른 줄은 < 값 >)
+          const o = OPTIONS[item.option], value = o.show(this.rules[item.option]);
+          this.overlay.add(this.add.text(220, this.menuY(i), o.label, text(10, on ? UI_HEX.title : UI_HEX.muted, FONT_SMALL)).setOrigin(0, 0.5));
+          this.overlay.add(this.add.text(420, this.menuY(i), on ? `< ${value} >` : value, text(12, on ? UI_HEX.title : UI_HEX.label)).setOrigin(1, 0.5));
+          return;
+        }
         this.overlay.add(this.add.text(320, this.menuY(i), item.label, text(12, on ? UI_HEX.title : UI_HEX.label)).setOrigin(0.5));
+      });
+    }
+    if (this.mode === 'draft' && this.draft.pick) {
+      const p = this.draft.player, y = this.draftPopupY();
+      this.overlay.add(windowAt(this, 320, y + 6, 180, 66, { accent: PLAYER_COLOR[p] }));
+      this.draft.pick.kinds.forEach((kind, i) => {
+        const x = this.draftKindX(i), on = i === this.draft.pick.index;
+        this.overlay.add(this.add.rectangle(x, y - 10, 20, 20, TERRAIN_COLOR[kind].light).setStrokeStyle(on ? 2 : 1, on ? PLAYER_COLOR[p] : TERRAIN_COLOR[kind].mark));
+        this.overlay.add(this.add.text(x, y + 4, TERRAIN[kind].name, text(12, on ? '#f2ead8' : '#8d8798')).setOrigin(0.5, 0));
+        this.overlay.add(this.add.text(x, y + 19, TERRAIN[kind].battle, text(10, on ? '#d8d2c4' : '#6d6878', FONT_SMALL)).setOrigin(0.5, 0));
       });
     }
     if (this.mode === 'online') {
@@ -726,8 +949,9 @@ export class BoardScene extends Phaser.Scene {
     return 320 - 45 + i * 90;
   }
 
+  // 메뉴 줄 높이. 규칙 줄과 모드 줄 사이는 조금 띄운다
   menuY(i) {
-    return BOARD_Y + 95 + i * 22;
+    return BOARD_Y + 44 + i * 20 + (i >= OPTION_ROWS ? 8 : 0);
   }
 
   promoX(i) {
