@@ -9,6 +9,7 @@ import { startGamepads } from './input/gamepad.js';
 await Promise.all([
   document.fonts.load('12px Galmuri11'),
   document.fonts.load('10px Galmuri9'),
+  document.fonts.load('15px Galmuri14'), // 제목·전투 안내 글자
 ]).catch(() => {});
 
 // 링크로 들어온 친구는 게임을 돌리지 않고 호스트 화면을 받아 본다 (src/net/online.js)

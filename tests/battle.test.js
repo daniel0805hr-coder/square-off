@@ -150,3 +150,14 @@ test('필살기: 나이트 대도약은 평소 점프보다 멀리', () => {
   };
   assert.ok(jump({ ultimate: true }) > jump({ special: true }) + 20);
 });
+
+test('동시에 쓰러지면 수비자가 HP 1로 버팀 (HP 0인 말이 판에 남지 않음)', () => {
+  // 둘 다 한 대면 쓰러지는 HP로 마주 걸어가 같은 순간에 때린다
+  const b = new Battle({ type: 'N', color: 'w', hp: 1 }, { type: 'N', color: 'b', hp: 1 });
+  b.attacker.x = -12; b.defender.x = 12;
+  b.step(DT, { 1: { attack: true }, 2: { attack: true } });
+  assert.equal(b.reason, 'ko');
+  assert.equal(b.winner, 'defender');
+  assert.equal(b.attacker.hp, 0);
+  assert.equal(b.defender.hp, 1);
+});

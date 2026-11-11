@@ -6,7 +6,7 @@
 // 친구 → 호스트 메시지: { t: 'down' | 'up', action, source } (동작 키), { t: 'click', x, y } (게임 좌표 640×360 클릭)
 // 호스트 → 친구 메시지(peer만): { t: 'full' } (이미 다른 친구가 들어와 있음)
 
-import { remoteInput, actionFor, mouseCode, online } from '../input/controls.js';
+import { ACTIONS, remoteInput, actionFor, mouseCode, online } from '../input/controls.js';
 import { addGuestKeys } from './guestKeys.js';
 
 const PREFIX = 'squareoff-';
@@ -85,7 +85,7 @@ function onGuestMessage(msg, onClick) {
 
 // 친구가 나가면 누르고 있던 키를 모두 뗀 것으로
 const releaseAll = () => {
-  for (const action of ['up', 'down', 'left', 'right', 'confirm', 'skill', 'cancel']) remoteInput({ action, down: false });
+  for (const action of ACTIONS) remoteInput({ action, down: false });
 };
 
 // 방을 만든다. 친구가 들어오면 화면을 보내고 친구 입력을 P2 명령으로 넘긴다.

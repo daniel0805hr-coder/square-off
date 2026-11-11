@@ -135,3 +135,27 @@ test('체스판: 추격전 승리는 HP 보상 없음', () => {
   g.move(sq('d1'), sq('d5'), 'Q', 'attacker', { attacker: 40, defender: 30, noReward: true });
   assert.equal(currentHp(g.pieceAt(sq('d5'))), 40);
 });
+
+test('룩 도망자: 벽 블록이 자기 몸이나 점프 중인 술래의 착지 자리에 끼지 않음', () => {
+  // 칸 경계 가까이 서서 놓아도 (바로 뒤 칸이 몸과 겹치는 자리) 블록에 갇히지 않고 계속 움직일 수 있다
+  for (let off = 0; off < CHASE.tile; off++) {
+    const ch = new Chase(W('N'), B('R'), { grid: open() });
+    const rook = ch.defender;
+    rook.x = 100 + off; rook.fx = -1; rook.fy = 0; // 왼쪽을 보고 → 블록은 오른쪽(등 뒤)에
+    ch.step(DT, { 2: { special: true } });
+    assert.equal(ch.grid.flat().filter((v) => v === BLOCK).length, 1, `off ${off}: 블록 설치`);
+    assert.equal(ch.blocked(rook, rook.x, rook.y), false, `off ${off}: 룩이 블록에 낌`);
+  }
+  // 점프해서 날아오는 나이트의 착지 칸에는 못 놓는다
+  const ch = new Chase(W('N'), B('R'), { grid: open() });
+  const [knight, rook] = ch.fighters;
+  knight.x = 0; knight.y = 0; knight.fx = 1; knight.fy = 0;
+  ch.step(DT, { 1: { special: true } });
+  assert.ok(knight.jumpTime > 0);
+  const land = cellOf(knight.jumpTo.x, knight.jumpTo.y);
+  rook.x = cellCenter(land.c + 1, land.r).x + 13; rook.y = knight.jumpTo.y; rook.fx = 1; rook.fy = 0; // 등 뒤 = 착지 칸
+  ch.step(DT, { 2: { special: true } });
+  assert.notEqual(ch.grid[land.r][land.c], BLOCK);
+  steps(ch, 40);
+  assert.equal(ch.blocked(knight, knight.x, knight.y), false);
+});

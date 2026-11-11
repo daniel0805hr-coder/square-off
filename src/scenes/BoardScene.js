@@ -1,5 +1,5 @@
 import { ChessGame, WHITE, BLACK, PIECE_NAMES, PROMOTION_TYPES, isLightSquare } from '../logic/chess.js';
-import { InputRouter, keyLabels, online } from '../input/controls.js';
+import { InputRouter, keyLabels, online, actionFor } from '../input/controls.js';
 import { hostRoom, HostPanel } from '../net/online.js';
 import { chooseChessMove, BOT_LEVELS } from '../logic/ai.js';
 import { BOARD } from '../logic/balance.js';
@@ -57,6 +57,8 @@ const VETERAN_CHOICES = [
 ];
 
 const DIRS = { up: [-1, 0], down: [1, 0], left: [0, -1], right: [0, 1] };
+const OVER_LOCK = 800; // 결과 창이 뜬 뒤 이 시간(ms) 동안은 선택 키를 받지 않는다 (전투에서 연타하던 키에 결과가 바로 넘어가지 않게)
+const QUIT_ASK = 2500; // 그만두기를 물어보는 시간(ms). 이 안에 한 번 더 누르면 메뉴로
 
 export class BoardScene extends Phaser.Scene {
   constructor() {
@@ -79,6 +81,13 @@ export class BoardScene extends Phaser.Scene {
     // 전투 또는 키 설정 화면에서 돌아왔을 때
     this.events.on('wake', (_sys, data) => (data?.from === 'keys' ? this.render() : this.onBattleEnd(data)));
     this.input.on('pointerdown', (p) => this.onPointer(p, 'local'));
+    // 하던 판 그만두기: Esc (패드는 동작에 지정하지 않은 Start 버튼). 이 컴퓨터에서만 — 온라인 친구는 못 끈다
+    const onQuitKey = (event) => {
+      const quitKey = event.code === 'Escape' || (/^Pad\d+:B9$/.test(event.code) && !actionFor(event.code));
+      if (quitKey && !event.repeat && this.sys.isActive()) this.askQuit();
+    };
+    window.addEventListener('keydown', onQuitKey);
+    this.events.once('shutdown', () => window.removeEventListener('keydown', onQuitKey));
     this.render();
   }
 
@@ -94,7 +103,25 @@ export class BoardScene extends Phaser.Scene {
     this.ai = null;
     this.aiTimer?.remove();
     this.promo = null; // { from, to, index }
+    this.vet = null;
+    this.pendingMove = null;
+    this.duelPending = false;
+    this.quitAsked = null;
+    this.overAt = 0;
     this.flash = null;
+  }
+
+  // 하던 판을 그만두고 메뉴로. 실수로 누르지 않게 두 번 눌러야 한다 (전투로 넘어가는 중에는 안 됨)
+  askQuit() {
+    if (!['select', 'promotion', 'draft', 'veteran'].includes(this.mode)) return;
+    if (this.quitAsked !== null && this.game.getTime() - this.quitAsked < QUIT_ASK) {
+      this.newGame();
+      this.say('하던 판을 그만뒀어요');
+    } else {
+      this.quitAsked = this.game.getTime();
+      this.say('이 판을 그만두고 메뉴로 갈까요? 한 번 더 누르면 그만둬요', QUIT_ASK);
+    }
+    this.render();
   }
 
   chooseMenu(i) {
@@ -256,13 +283,24 @@ export class BoardScene extends Phaser.Scene {
   // 온라인 방 만들기: 링크를 보여주고 친구를 기다린다. 친구가 들어오면 바로 2인 대전 (친구 = P2)
   //   kind: 'peer' = 인터넷 링크 방, 'lan' = 같은 와이파이·VPN 방 (src/net/online.js)
   openRoom(kind) {
-    if (this.room) {
-      // 이미 친구와 연결된 상태면 바로 새 대전
-      if (online.role === 'host') this.startGame(null);
+    // 이미 친구와 연결된 상태면 바로 새 대전
+    if (this.room && online.role === 'host') { this.startGame(null); return; }
+    const lan = kind === 'lan';
+    const waiting = (links) => {
+      this.onlineText = lan
+        ? '친구를 기다리는 중…\n아래 주소 중 친구와 같은 네트워크(VPN) 주소를 보내세요'
+        : '친구를 기다리는 중…\n아래 링크를 친구에게 보내세요';
+      this.panel.show(lan ? '친구 PC에서 열 주소' : '방 링크', links);
+    };
+    this.mode = 'online';
+    // 방은 열려 있는데 친구가 나간 뒤: 같은 방(같은 링크)에서 다시 기다린다. 방식이 다르거나 오류가 났던 방이면 새로 만든다
+    if (this.room && this.roomKind === kind && this.roomLinks) {
+      waiting(this.roomLinks);
+      this.render();
       return;
     }
-    this.mode = 'online';
-    const lan = kind === 'lan';
+    this.closeRoom();
+    this.roomKind = kind;
     this.onlineText = lan ? '이 PC의 주소를 확인하는 중…' : '연결 서버에 접속하는 중…';
     this.panel = new HostPanel();
     this.panel.show(this.onlineText);
@@ -272,19 +310,23 @@ export class BoardScene extends Phaser.Scene {
       onClick: (at) => this.onPointer(at, 'remote'),
       onStatus: (st) => {
         if (st.state === 'waiting') {
-          this.onlineText = lan
-            ? '친구를 기다리는 중…\n아래 주소 중 친구와 같은 네트워크(VPN) 주소를 보내세요'
-            : '친구를 기다리는 중…\n아래 링크를 친구에게 보내세요';
-          this.panel.show(lan ? '친구 PC에서 열 주소' : '방 링크', st.links);
+          this.roomLinks = st.links;
+          waiting(st.links);
         } else if (st.state === 'joined') {
           this.panel.show('온라인 · 친구(P2) 연결됨');
-          this.newGame();
-          this.startGame(null);
-          this.say('친구가 들어왔어요! 나는 P1(백), 친구는 P2(흑)');
+          if (['menu', 'online', 'over'].includes(this.mode)) {
+            this.newGame();
+            this.startGame(null);
+            this.say('친구가 들어왔어요! 나는 P1(백), 친구는 P2(흑)');
+          } else {
+            // 하던 판(전투 중일 수도 있음)에 친구가 다시 들어옴 → 판을 새로 깔지 않고 그대로 이어서 한다
+            this.say(this.ai === null ? '친구가 다시 들어왔어요 — 하던 판을 이어서 해요' : '친구가 들어왔어요 — 이 판이 끝나면 메뉴에서 온라인 대전을 시작하세요');
+          }
         } else if (st.state === 'left') {
           this.panel.show('친구 연결이 끊겼어요 — 이제 이 컴퓨터에서 P2도 조작해요');
           this.say('친구 연결이 끊겼어요');
         } else if (st.state === 'error') {
+          this.roomLinks = null;
           this.onlineText = `${st.message}\n\n2인 대전(한 컴퓨터)은 인터넷 없이도 돼요`;
           this.panel.show(st.message);
         }
@@ -297,8 +339,16 @@ export class BoardScene extends Phaser.Scene {
   closeRoom() {
     this.room?.close();
     this.room = null;
+    this.roomLinks = null;
     this.panel?.remove();
     this.panel = null;
+  }
+
+  // 방 만들기 화면에서 취소 → 메뉴로
+  cancelRoom() {
+    this.closeRoom();
+    this.mode = 'menu';
+    this.render();
   }
 
   // 온라인일 때 이 입력이 그 플레이어 것인가 (who: 'local' = 이 컴퓨터 = P1, 'remote' = 친구 = P2)
@@ -331,13 +381,15 @@ export class BoardScene extends Phaser.Scene {
 
   // ───────── 입력 처리 ─────────
 
-  onCommand({ player, action, source, remote }) {
+  onCommand({ player, action, source, remote, repeat }) {
     if (this.mode === 'battle') return;
     // 체스판은 마우스로 직접 칸을 고른다. 마우스 버튼 지정은 전투 화면에서만 쓴다
     if (source === 'mouse') return;
+    // 누르고 있는 선택·취소 키가 다음 화면까지 이어서 눌리지 않게 (결과 창 → 메뉴 → 새 게임이 한 번에 넘어가던 문제)
+    if (repeat && !DIRS[action]) return;
     const who = remote ? 'remote' : 'local';
     if (this.mode === 'online') {
-      if (action === 'cancel' && !remote) { this.closeRoom(); this.mode = 'menu'; this.render(); }
+      if (action === 'cancel' && !remote) this.cancelRoom();
       return;
     }
     if (this.mode === 'menu' && remote) return; // 메뉴는 호스트만
@@ -351,7 +403,7 @@ export class BoardScene extends Phaser.Scene {
       return;
     }
     if (this.mode === 'over') {
-      if (action === 'confirm') { this.newGame(); this.render(); }
+      if (action === 'confirm' && this.game.getTime() - this.overAt >= OVER_LOCK) { this.newGame(); this.render(); }
       return;
     }
     if (this.mode === 'veteran') {
@@ -395,7 +447,12 @@ export class BoardScene extends Phaser.Scene {
   onPointer(pointer, who = 'local') {
     const c = Math.floor((pointer.x - BOARD_X) / TILE);
     const r = Math.floor((pointer.y - BOARD_Y) / TILE);
-    if (this.mode === 'battle' || this.mode === 'online') return;
+    if (this.mode === 'battle') return;
+    if (this.mode === 'online') {
+      // 창 아래 '취소' 줄을 누르면 메뉴로 (호스트만)
+      if (who === 'local' && Math.abs(pointer.y - (BOARD_Y + 174)) <= 9 && Math.abs(pointer.x - 320) <= 110) this.cancelRoom();
+      return;
+    }
     if (who === 'remote' && online.role !== 'host') return;
     if (this.mode === 'menu') {
       if (who === 'remote') return; // 메뉴는 호스트만
@@ -423,9 +480,10 @@ export class BoardScene extends Phaser.Scene {
       this.render();
       return;
     }
-    if (this.isAi(this.currentPlayer)) return;
-    if (this.mode !== 'over' && online.role === 'host' && !this.ownedBy(who, this.currentPlayer)) return;
+    // 결과 창은 누구든 눌러서 넘긴다 (컴퓨터 차례에서 끝난 판도)
     if (this.mode === 'over') { this.onCommand({ player: 1, action: 'confirm' }); return; }
+    if (this.isAi(this.currentPlayer)) return;
+    if (online.role === 'host' && !this.ownedBy(who, this.currentPlayer)) return;
     if (this.mode === 'promotion') {
       const i = this.promoIndexAt(pointer.x, pointer.y);
       if (i !== null) { this.promo.index = i; this.onCommand({ player: this.currentPlayer, action: 'confirm', remote: who === 'remote' }); }
@@ -470,7 +528,7 @@ export class BoardScene extends Phaser.Scene {
 
   finishMove(from, to, promotion, outcome, hp) {
     const rec = this.chess.move(from, to, promotion, outcome, hp);
-    this.mode = this.chess.result ? 'over' : 'select';
+    this.settle();
     if (rec?.promotion) this.fxAt(FX.holyPillar, rec.to, { shafts: 5 });
     for (const sq of rec?.healed || []) this.fxAt(FX.collectBurst, sq, { palette: RAMP.heal }, 33);
     if (rec?.captured) {
@@ -485,10 +543,16 @@ export class BoardScene extends Phaser.Scene {
       const player = PLAYER_OF[rec.piece.color];
       this.vet = { square: rec.veteranPending, player, index: 0 };
       this.mode = 'veteran';
-      if (this.isAi(player)) this.time.delayedCall(700, () => { this.chooseVeteran('atk'); this.render(); });
+      if (this.isAi(player)) this.aiTimer = this.time.delayedCall(700, () => { this.chooseVeteran('atk'); this.render(); });
       return;
     }
     this.afterTurn();
+  }
+
+  // 수·결전이 끝난 뒤의 화면 상태: 게임이 끝났으면 결과 창, 아니면 다음 수 고르기
+  settle() {
+    this.mode = this.chess.result ? 'over' : 'select';
+    if (this.chess.result) this.overAt = this.game.getTime(); // 장면 시계는 전투 동안 멈춰 있어서 게임 시계로 잰다
   }
 
   // 수가 끝난 뒤: 체크메이트면 결전, 아니면 다음 차례 (컴퓨터면 둔다)
@@ -514,7 +578,7 @@ export class BoardScene extends Phaser.Scene {
   // 잡는 수 → 그 칸으로 줌인한 뒤 전투 장면으로
   startBattle(move, promotion) {
     this.mode = 'battle';
-    this.pendingMove = { from: move.from, to: move.to, promotion };
+    this.pendingMove = { from: move.from, to: move.to, promotion, capturedSquare: move.capturedSquare };
     this.render();
     const { x, y } = this.tileCenter(move.capturedSquare);
     const cam = this.cameras.main;
@@ -524,7 +588,7 @@ export class BoardScene extends Phaser.Scene {
     this.time.delayedCall(280, () => {
       cam.pan(x, y, 450, 'Sine.easeIn');
       cam.zoomTo(6, 450, 'Sine.easeIn');
-      cam.fadeOut(450, 17, 16, 24);
+      cam.fade(450, 17, 16, 24, true); // 돌아오는 페이드인이 덜 끝났어도 반드시 시작 (안 그러면 전투로 못 넘어가고 멈춘다)
     });
     cam.once('camerafadeoutcomplete', () => {
       const bot = this.ai ? { player: AI_PLAYER, level: this.ai } : null;
@@ -557,7 +621,7 @@ export class BoardScene extends Phaser.Scene {
       const { x, y } = this.tileCenter(d.king);
       cam.pan(x, y, 450, 'Sine.easeIn');
       cam.zoomTo(6, 450, 'Sine.easeIn');
-      cam.fadeOut(450, 17, 16, 24);
+      cam.fade(450, 17, 16, 24, true);
       cam.once('camerafadeoutcomplete', () => {
         this.selected = null;
         const bot = this.ai ? { player: AI_PLAYER, level: this.ai } : null;
@@ -579,26 +643,27 @@ export class BoardScene extends Phaser.Scene {
     if (this.duelPending) {
       this.duelPending = false;
       const rec = this.chess.resolveDuel(winner, hp);
-      this.mode = this.chess.result ? 'over' : 'select';
+      this.settle();
       if (!this.chess.result) this.say(`킹 승리! ${PIECE_NAMES[rec.piece.type]}이(가) 쓰러졌다 — 게임 계속`);
       this.afterTurn();
       this.render();
       return;
     }
-    const { from, to, promotion } = this.pendingMove;
+    const { from, to, promotion, capturedSquare } = this.pendingMove;
     this.pendingMove = null;
     // 공격자 승리(KO·턴제 판정승) = 잡기 성공 → 보상·베테랑 적용, 방어자 KO = 공격한 말 제거, 시간 종료 방어 = 둘 다 제자리
     const outcome = winner === 'attacker' ? 'attacker' : reason === 'time' ? 'retreat' : 'defender';
     // 쓰러진 말이 있던 칸에 연기
-    if (outcome !== 'retreat') this.fxAt(FX.poof, outcome === 'attacker' ? to : from);
+    //   (앙파상은 잡힌 폰이 도착 칸이 아니라 옆 칸에 있었다)
+    if (outcome !== 'retreat') this.fxAt(FX.poof, outcome === 'attacker' ? capturedSquare : from);
     this.finishMove(from, to, promotion, outcome, hp);
     this.render();
   }
 
-  say(msg) {
+  say(msg, ms = 1800) {
     this.flash = msg;
     this.flashTimer?.remove();
-    this.flashTimer = this.time.delayedCall(1800, () => { this.flash = null; this.render(); });
+    this.flashTimer = this.time.delayedCall(ms, () => { this.flash = null; this.render(); });
   }
 
   // ───────── 그리기 ─────────
@@ -642,6 +707,7 @@ export class BoardScene extends Phaser.Scene {
         { ...text(10, UI_HEX.muted, FONT_SMALL), lineSpacing: 1, wordWrap: { width: 140 } });
     }
     this.statusText = this.add.text(320, 336, '', text(12, UI_HEX.text)).setOrigin(0.5, 0).setStroke('#0b0a10', 3);
+    this.quitHint = this.add.text(628, 322, 'Esc = 그만두고 메뉴로', text(10, UI_HEX.muted, FONT_SMALL)).setOrigin(1, 0);
     this.panelFrame = this.add.graphics();
   }
 
@@ -875,6 +941,7 @@ export class BoardScene extends Phaser.Scene {
     else if (!g.result) status = `${SIDE_NAME[g.turn]} 차례${g.inCheck(g.turn) ? ' — 체크!' : ''}`;
     else status = '';
     this.statusText.setText(status);
+    this.quitHint.setVisible(['select', 'promotion', 'draft', 'veteran'].includes(this.mode));
   }
 
   renderOverlay() {
@@ -912,7 +979,7 @@ export class BoardScene extends Phaser.Scene {
       this.overlay.add(this.add.text(320, BOARD_Y + 74, '온라인 · 방 만들기', text(12, '#f2ead8')).setOrigin(0.5, 0));
       this.overlay.add(this.add.text(320, BOARD_Y + 96, this.onlineText,
         { ...text(10, '#d8d2c4', FONT_SMALL), align: 'center', lineSpacing: 3, wordWrap: { width: 208, useAdvancedWrap: true } }).setOrigin(0.5, 0));
-      this.overlay.add(this.add.text(320, BOARD_Y + 168, `취소(${keyLabels(1).cancel}) = 메뉴로`, text(10, '#8d8798', FONT_SMALL)).setOrigin(0.5, 0));
+      this.overlay.add(this.add.text(320, BOARD_Y + 168, `취소(${keyLabels(1).cancel} · 여기 클릭) = 메뉴로`, text(10, '#8d8798', FONT_SMALL)).setOrigin(0.5, 0));
     }
     if (this.mode === 'veteran') {
       const col = PLAYER_COLOR[this.vet.player];

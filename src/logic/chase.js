@@ -257,17 +257,25 @@ export class Chase {
   }
 
   // 등 뒤 칸에 벽 블록 설치 (술래가 서 있는 칸에는 못 놓음)
+  //   바로 뒤 칸이 내 몸과 겹치면 (칸 경계 가까이 서 있을 때) 한 뼘씩 더 뒤 칸을 본다 — 자기 블록에 끼어 못 움직이지 않게
   placeBlock(f) {
-    const { c, r } = cellOf(f.x - f.fx * (f.body + 12), f.y - f.fy * (f.body + 12));
-    if (!inGrid(c, r) || this.grid[r][c] !== OPEN) return false;
     const foe = this.foeOf(f);
     const fc = cellOf(foe.x, foe.y), mine = cellOf(f.x, f.y);
-    if ((fc.c === c && fc.r === r) || (mine.c === c && mine.r === r)) return false;
-    this.grid[r][c] = BLOCK;
-    // 블록이 술래 몸과 겹치면 취소
-    if (this.blocked(foe, foe.x, foe.y)) { this.grid[r][c] = OPEN; return false; }
-    this.events.push({ type: 'block', fighter: f, c, r });
-    return true;
+    for (const back of [12, 18, 24, 30]) {
+      const { c, r } = cellOf(f.x - f.fx * (f.body + back), f.y - f.fy * (f.body + back));
+      if (!inGrid(c, r) || this.grid[r][c] !== OPEN) continue;
+      if ((fc.c === c && fc.r === r) || (mine.c === c && mine.r === r)) continue;
+      this.grid[r][c] = BLOCK;
+      // 블록이 누군가의 몸(점프 중인 술래는 착지할 자리)과 겹치면 취소
+      const landing = foe.jumpTime > 0 ? foe.jumpTo : foe;
+      if (this.blocked(f, f.x, f.y) || this.blocked(foe, foe.x, foe.y) || this.blocked(foe, landing.x, landing.y)) {
+        this.grid[r][c] = OPEN;
+        continue;
+      }
+      this.events.push({ type: 'block', fighter: f, c, r });
+      return true;
+    }
+    return false;
   }
 
   finish(winner, reason) {

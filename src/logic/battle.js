@@ -388,6 +388,8 @@ export class Battle {
   finish(winner, reason) {
     this.winner = winner;
     this.reason = reason;
+    // 같은 순간에 둘 다 쓰러지면 수비자 승리 — HP 1로 버틴다 (HP 0인 말이 판에 남지 않게, 턴제와 같은 규칙)
+    if (this[winner].hp <= 0) this[winner].hp = 1;
     this.events.push({ type: 'end', winner, reason });
   }
 }
