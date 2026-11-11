@@ -3,10 +3,10 @@ import { BattleBot } from '../logic/ai.js';
 import { TOPDOWN as T, ULTIMATE } from '../logic/balance.js';
 import { PIECE_NAMES } from '../logic/chess.js';
 import { InputRouter, keyLabels } from '../input/controls.js';
-import { FONT_SMALL, FONT_BIG, text, C, PLAYER_COLOR, PLAYER_HEX, SIDE_NAME, endTitle } from '../ui/style.js';
+import { FONT_SMALL, FONT_BIG, text, setLabel, C, PLAYER_COLOR, PLAYER_HEX, SIDE_NAME, endTitle } from '../ui/style.js';
 import { FighterView } from '../ui/fighter.js';
-import { drawBattleHud, drawBrickWall, wallShadow } from '../ui/frame.js';
-import { FxLayer, FX, RAMP, sideRamp, duelEntrance } from '../ui/pixelfx.js';
+import { drawBattleHud, drawBrickWall, wallShadow, bakedLayer } from '../ui/frame.js';
+import { FxLayer, FX, RAMP, sideRamp, duelEntrance, wallTorches } from '../ui/pixelfx.js';
 
 const ARENA_X = 320; // 아레나 중심 (화면 좌표)
 const ARENA_Y = 190;
@@ -56,7 +56,7 @@ export class BattleScene extends Phaser.Scene {
     this.pfx = new FxLayer(this, { depth: 5 }); // 도트 이펙트 (타격 불꽃 등)
     this.ultUntil = [0, 0]; // 필살기 연출 중인 시각 (말 순서별, ms) — 이 동안의 타격은 큰 불꽃
     // 투기장 양옆 횃불 (위쪽 체력 바와 겹치지 않게 가운데 높이)
-    for (const x of [35, 605]) this.pfx.play(FX.torch, { x, y: 214, flip: x > 320, seed: x }); // 벽에 걸린 횃불
+    wallTorches(this, [35, 605], 214); // 벽에 걸린 횃불
     this.stunText = this.battle.fighters.map(() => this.add.text(0, 0, '기절', text(10, '#ffe08a', FONT_SMALL))
       .setOrigin(0.5).setStroke('#111018', 3).setDepth(9).setVisible(false));
     this.drawHud();
@@ -263,8 +263,12 @@ export class BattleScene extends Phaser.Scene {
   }
 
   drawArena() {
+    bakedLayer(this, (g) => this.paintArena(g));
+    this.add.text(320, 40, '투기장', text(10, '#a59db3', FONT_SMALL)).setOrigin(0.5, 0);
+  }
+
+  paintArena(g) {
     const { w, h } = T.arena;
-    const g = this.add.graphics();
     const x0 = ARENA_X - w / 2, y0 = ARENA_Y - h / 2;
     g.fillStyle(0x111018).fillRect(0, 0, 640, 360);
     drawBrickWall(g, x0, y0, w, h, 10);
@@ -281,7 +285,6 @@ export class BattleScene extends Phaser.Scene {
     g.fillStyle(C.sandDark);
     for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]]) g.fillRect(ARENA_X + dx * 44 - (dx ? 3 : 0), ARENA_Y + dy * 44 - (dy ? 3 : 0), dx ? 6 : 1, dy ? 6 : 1);
     drawBattleHud(g);
-    this.add.text(320, 40, '투기장', text(10, '#a59db3', FONT_SMALL)).setOrigin(0.5, 0);
   }
 
   drawHud() {
@@ -331,11 +334,10 @@ export class BattleScene extends Phaser.Scene {
       const s = this.specialState(f);
       h.bar.fillStyle(0x3a3746).fillRect(h.x, 46, 160, 4);
       h.bar.fillStyle(s.ready ? READY : CHARGING).fillRect(h.x, 46, Math.round(160 * s.progress), 4);
-      h.special.setText(s.label).setColor(s.ready ? '#ffe08a' : '#8d8798');
-      h.ult.setText(f.ultUsed ? '필살기 사용함' : '필살기 준비').setColor(f.ultUsed ? '#5a5566' : '#ffe08a');
+      setLabel(h.special, s.label, s.ready ? '#ffe08a' : '#8d8798');
+      setLabel(h.ult, f.ultUsed ? '필살기 사용함' : '필살기 준비', f.ultUsed ? '#5a5566' : '#ffe08a');
     }
-    this.timer.setText(b.deathmatch ? '결전' : String(Math.ceil(b.timeLeft)));
-    this.timer.setColor(b.timeLeft <= 3 && this.phase === 'fight' ? '#ff6a5a' : '#f2ead8');
+    setLabel(this.timer, b.deathmatch ? '결전' : String(Math.ceil(b.timeLeft)), b.timeLeft <= 3 && this.phase === 'fight' ? '#ff6a5a' : '#f2ead8');
 
     const g = this.fx.clear();
     const top = this.top.clear();

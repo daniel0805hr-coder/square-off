@@ -85,3 +85,17 @@ export function drawBrickWall(g, x, y, w, h, t, { stone = 0x5a5262, mortar = 0x2
 export function wallShadow(g, x, y, w, h) {
   return g.fillStyle(0x000000, 0.28).fillRect(x, y, w, 3).fillRect(x, y, 2, h);
 }
+
+// 안 바뀌는 그림(배경·벽·미로)은 한 장으로 구워 둔다
+//   그래픽 객체는 매 프레임 그리기 명령(미로는 1만 개 넘게)을 처음부터 다시 실행해서 저사양 PC가 버벅인다
+//   paint(g)에 그릴 내용을 넘긴다. 돌려받은 그림의 redraw()로 다시 굽는다 (미로에 벽 블록이 생길 때 등)
+export function bakedLayer(scene, paint) {
+  const rt = scene.add.renderTexture(0, 0, 640, 360).setOrigin(0);
+  const g = scene.make.graphics({ add: false });
+  rt.redraw = () => {
+    paint(g.clear());
+    rt.clear().draw(g);
+    return rt;
+  };
+  return rt.redraw();
+}

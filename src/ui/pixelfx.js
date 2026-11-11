@@ -53,19 +53,60 @@ export function duelEntrance(scene) {
   scene.time.delayedCall(620, () => scene.cameras.main.shake(220, 0.012));
 }
 
+// 벽에 걸린 횃불: 횃불마다 둘레만 한 작은 레이어에 30fps로 (전투 내내 켜져 있어 화면 전체 레이어에 두면 매 프레임 무겁다)
+//   벽에 비치는 불빛까지 담는 크기: 실제로 그려지는 범위(좌우 64, 위 100, 아래 39px)에 여유를 둠
+const TORCH_BOX = { left: 72, right: 72, up: 112, down: 48 };
+export function wallTorches(scene, xs, y, depth = 5) {
+  const { left, right, up, down } = TORCH_BOX;
+  for (const x of xs) {
+    const rect = { x: x - left, y: y - up, w: left + right, h: up + down };
+    new FxLayer(scene, { depth, rect, fps: torch.meta.fps }).play(torch, { x, y, flip: x > 320, seed: x });
+  }
+}
+
+// 리틀 엔디언이면 pixelfx 색 숫자(ABGR)를 RGBA 바이트 4개로 한 번에 옮길 수 있다 (사실상 모든 PC)
+const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
+
+// pixelfx composite(f, out, null)과 같은 결과. 빛이 없는 칸(거의 전부)은 색을 그대로 복사해서 몇 배 빠르다
+function compositeFast(f, out, px) {
+  const C = f.color, L = f.light, n = f.w * f.h;
+  for (let i = 0; i < n; i++) {
+    const l = L[i];
+    if (!(l & 0xffffff)) { px[i] = C[i]; continue; }
+    const c = C[i], lr = l & 255, lg = (l >>> 8) & 255, lb = (l >>> 16) & 255;
+    let r = c & 255, g = (c >>> 8) & 255, b = (c >>> 16) & 255, a = c >>> 24;
+    if (a < 255) {
+      // 투명 위의 빛: 있는 색에 알파를 곱하고 빛을 더한 뒤 새 알파로 나눈다
+      const pa = a / 255, pr = r * pa + lr, pg = g * pa + lg, pb = b * pa + lb;
+      const na = Math.min(1, Math.max(pa, Math.max(lr, lg, lb) / 255));
+      if (na > 0) { r = Math.min(255, pr / na); g = Math.min(255, pg / na); b = Math.min(255, pb / na); a = na * 255; }
+    } else {
+      r = Math.min(255, r + lr); g = Math.min(255, g + lg); b = Math.min(255, b + lb);
+    }
+    const j = i * 4;
+    out[j] = r; out[j + 1] = g; out[j + 2] = b; out[j + 3] = a;
+  }
+}
+
 let uid = 0;
 
 export class FxLayer {
   // depth: 그릴 순서, scale: 2면 320×180 이펙트(화면 전환·날씨)를 화면 전체에 2배로, fixed: 카메라 줌·이동을 따르지 않음
-  constructor(scene, { depth = 8, scale = 1, fixed = false } = {}) {
-    const w = 640 / scale, h = 360 / scale;
+  //   rect: { x, y, w, h } 이 화면 영역만 그린다 (밖은 잘림). 작을수록 가볍다 — 매 프레임 영역 전체를 칠하고 올리므로
+  //   fps: 다시 그리는 빈도 상한 (늘 켜 둔 배경 이펙트용. 날씨·횃불은 원래 30fps 그림이라 30이면 똑같이 보인다)
+  constructor(scene, { depth = 8, scale = 1, fixed = false, rect = null, fps = 0 } = {}) {
+    const { x = 0, y = 0, w: rw = 640, h: rh = 360 } = rect ?? {};
+    const w = Math.ceil(rw / scale), h = Math.ceil(rh / scale);
     this.scene = scene;
     this.scale = scale;
-    this.frame = createFrame(w, h);
+    this.frame = createFrame(w, h, Math.floor(x / scale), Math.floor(y / scale));
     this.img = new ImageData(w, h);
+    this.px = new Uint32Array(this.img.data.buffer);
+    this.step = fps ? 1 / fps : 0;
+    this.wait = 0;
     this.key = `pixelfx-${uid++}`;
     this.tex = scene.textures.createCanvas(this.key, w, h);
-    this.view = scene.add.image(0, 0, this.key).setOrigin(0).setScale(scale).setDepth(depth).setVisible(false);
+    this.view = scene.add.image(this.frame.ox * scale, this.frame.oy * scale, this.key).setOrigin(0).setScale(scale).setDepth(depth).setVisible(false);
     if (fixed) this.view.setScrollFactor(0);
     this.list = [];
     scene.events.on('update', this.tick, this);
@@ -100,14 +141,19 @@ export class FxLayer {
       if (this.view.visible) this.view.setVisible(false);
       return;
     }
-    const dt = Math.min(deltaMs / 1000, 1 / 20);
+    // fps 상한이 있으면 그 간격이 찰 때까지 모았다가 한 번에 진행 (2ms 여유: 60Hz 화면에서 두 프레임마다 확실히 그리게)
+    this.wait += Math.min(deltaMs / 1000, 1 / 20);
+    if (this.wait < this.step - 0.002) return;
+    const dt = this.wait;
+    this.wait = 0;
     clearFrame(this.frame);
     for (const fx of this.list) {
       fx.update(dt);
       fx.draw(this.frame, fx.layer);
     }
     this.list = this.list.filter((fx) => !fx.done());
-    composite(this.frame, this.img.data, null);
+    if (LITTLE_ENDIAN) compositeFast(this.frame, this.img.data, this.px);
+    else composite(this.frame, this.img.data, null);
     this.tex.context.putImageData(this.img, 0, 0);
     this.tex.refresh();
     this.view.setVisible(true);

@@ -4,9 +4,9 @@ import { CHASE as CH } from '../logic/balance.js';
 import { PIECE_NAMES } from '../logic/chess.js';
 import { currentHp } from '../logic/units.js';
 import { InputRouter, keyLabels } from '../input/controls.js';
-import { FONT_SMALL, FONT_BIG, text, PLAYER_COLOR, PLAYER_HEX, SIDE_NAME } from '../ui/style.js';
+import { FONT_SMALL, FONT_BIG, text, setLabel, PLAYER_COLOR, PLAYER_HEX, SIDE_NAME } from '../ui/style.js';
 import { FighterView } from '../ui/fighter.js';
-import { drawBattleHud, drawBrickWall } from '../ui/frame.js';
+import { drawBattleHud, drawBrickWall, bakedLayer } from '../ui/frame.js';
 import { FxLayer, FX, RAMP } from '../ui/pixelfx.js';
 
 const ARENA_X = 320; // 미로 중심 (화면 좌표)
@@ -37,23 +37,22 @@ export class ChaseScene extends Phaser.Scene {
       if (action === 'skill') this.pressed[player].special = true;
     });
 
-    const bg = this.add.graphics().fillStyle(0x111018).fillRect(0, 0, 640, 360);
-    // 숲 테두리: 빽빽한 덤불 울타리
     const mw = CH.cols * CH.tile, mh = CH.rows * CH.tile;
-    drawBrickWall(bg, ARENA_X - mw / 2, ARENA_Y - mh / 2, mw, mh, 8, { stone: 0x24401f, mortar: 0x132612, hi: 0x3a6a30 });
-    drawBattleHud(bg);
-    this.mazeGfx = this.add.graphics();
-    this.drawMaze();
+    this.ground = bakedLayer(this, (g) => {
+      g.fillStyle(0x111018).fillRect(0, 0, 640, 360);
+      // 숲 테두리: 빽빽한 덤불 울타리
+      drawBrickWall(g, ARENA_X - mw / 2, ARENA_Y - mh / 2, mw, mh, 8, { stone: 0x24401f, mortar: 0x132612, hi: 0x3a6a30 });
+      drawBattleHud(g);
+      this.drawMaze(g);
+    });
     this.fx = this.add.graphics().setDepth(2);
     this.views = this.chase.fighters.map((f) => new FighterView(this, this.toScreen(f), f.piece,
       { body: f.body, color: PLAYER_COLOR[f.player] }).face(f.fx).setDepth(3));
-    // 숲에 떨어지는 나뭇잎: 원래 크기로 화면 대각선 두 조각만 (추격을 가리지 않을 만큼), 미로 안에서만 보이게
+    // 숲에 떨어지는 나뭇잎: 원래 크기로 화면 대각선 두 조각만 (추격을 가리지 않을 만큼), 미로 안에서만 보이게 (레이어를 미로 크기로)
     //   앞면만: 뒷면은 화면을 덮는 저녁 안개와 땅에 쌓인 낙엽이라 미로를 가린다
-    const leaves = new FxLayer(this, { depth: 4 });
+    const leaves = new FxLayer(this, { depth: 4, rect: { x: ARENA_X - mw / 2, y: ARENA_Y - mh / 2, w: mw, h: mh }, fps: FX.fallingLeaves.meta.fps });
     const [ox, oy] = FX.fallingLeaves.meta.origin;
     for (const [dx, dy] of [[0, 0], [320, 180]]) leaves.play(FX.fallingLeaves, { x: ox + dx, y: oy + dy, seed: 8 + dx }, { layer: 'front' });
-    const clip = this.make.graphics({ add: false }).fillRect(ARENA_X - mw / 2, ARENA_Y - mh / 2, mw, mh);
-    leaves.view.setMask(clip.createGeometryMask());
     this.pfx = new FxLayer(this, { depth: 5 });
     this.drawHud();
 
@@ -99,7 +98,7 @@ export class ChaseScene extends Phaser.Scene {
         this.ghost(f, ev.from || f);
         break;
       case 'block':
-        this.drawMaze();
+        this.ground.redraw();
         break;
       case 'land':
         this.cameras.main.shake(60, 0.004);
@@ -155,8 +154,7 @@ export class ChaseScene extends Phaser.Scene {
     return { x: ARENA_X + f.x, y: ARENA_Y + f.y };
   }
 
-  drawMaze() {
-    const g = this.mazeGfx.clear();
+  drawMaze(g) {
     const w = CH.cols * CH.tile, h = CH.rows * CH.tile;
     const x0 = ARENA_X - w / 2, y0 = ARENA_Y - h / 2;
     const grid = this.chase.grid;
@@ -221,11 +219,10 @@ export class ChaseScene extends Phaser.Scene {
 
   draw() {
     const ch = this.chase;
-    this.timer.setText(String(Math.ceil(ch.timeLeft)));
-    this.timer.setColor(ch.timeLeft <= 3 && this.phase === 'fight' ? '#6fd36f' : '#f2ead8');
+    setLabel(this.timer, String(Math.ceil(ch.timeLeft)), ch.timeLeft <= 3 && this.phase === 'fight' ? '#6fd36f' : '#f2ead8');
     for (const f of ch.fighters) {
       const s = this.specialLabel(f);
-      this.hud[f.role].special.setText(s.label).setColor(s.ready ? '#ffe08a' : '#8d8798');
+      setLabel(this.hud[f.role].special, s.label, s.ready ? '#ffe08a' : '#8d8798');
     }
 
     const g = this.fx.clear();

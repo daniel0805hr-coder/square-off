@@ -7,6 +7,13 @@ export const FONT_SMALL = 'Galmuri9';
 export const FONT_BIG = 'Galmuri14';
 export const text = (size, color, family = FONT) => ({ fontFamily: family, fontSize: `${size}px`, color });
 
+// 매 프레임 고치는 글자: 내용·색이 그대로면 손대지 않는다 (setColor는 같은 색이어도 글자 그림을 새로 만든다)
+export function setLabel(t, str, color) {
+  t.setText(str);
+  if (color && t.style.color !== color) t.setColor(color);
+  return t;
+}
+
 export const C = {
   light: 0xd8c8a8, dark: 0x8a6a4a,
   lastMove: 0xe8d36a, check: 0xd84a3a, select: 0xfff2a0, dot: 0x2b2420,

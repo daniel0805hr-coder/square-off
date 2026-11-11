@@ -5,8 +5,8 @@ import { PIECE_NAMES } from '../logic/chess.js';
 import { InputRouter, keyLabels } from '../input/controls.js';
 import { FONT_SMALL, FONT_BIG, text, PLAYER_COLOR, PLAYER_HEX, SIDE_NAME, endTitle } from '../ui/style.js';
 import { FighterView } from '../ui/fighter.js';
-import { UI, drawBattleHud, drawBrickWall, wallShadow } from '../ui/frame.js';
-import { FxLayer, FX, RAMP, duelEntrance } from '../ui/pixelfx.js';
+import { UI, drawBattleHud, drawBrickWall, wallShadow, bakedLayer } from '../ui/frame.js';
+import { FxLayer, FX, RAMP, duelEntrance, wallTorches } from '../ui/pixelfx.js';
 
 const ROLE_NAME = { attacker: '공격', defender: '수비' };
 const KEY_ACTION = { turnAttack: 'attack', turnDefend: 'defend', turnSkill: 'skill', turnFocus: 'focus', turnHeal: 'heal' };
@@ -45,7 +45,7 @@ export class TurnBattleScene extends Phaser.Scene {
     this.drawHall();
     this.pfx = new FxLayer(this, { depth: 5 });
     // 성채 벽 양옆 횃불
-    for (const x of [35, 605]) this.pfx.play(FX.torch, { x, y: 214, flip: x > 320, seed: x }); // 벽에 걸린 횃불
+    wallTorches(this, [35, 605], 214); // 벽에 걸린 횃불
     this.views = {};
     for (const f of this.battle.fighters) {
       // 서로 마주 보게 (P1 왼쪽 → 오른쪽을 봄)
@@ -248,7 +248,11 @@ export class TurnBattleScene extends Phaser.Scene {
 
   // 성채 홀: 돌벽 테두리 안에 뒷벽(양 팀 깃발) + 돌바닥 + 두 말을 잇는 붉은 융단
   drawHall() {
-    const g = this.add.graphics();
+    bakedLayer(this, (g) => this.paintHall(g));
+    this.add.text(320, 40, '성채', text(10, '#a59db3', FONT_SMALL)).setOrigin(0.5, 0);
+  }
+
+  paintHall(g) {
     g.fillStyle(0x111018).fillRect(0, 0, 640, 360);
     const x0 = 40, y0 = 70, w = 560, h = 240, wallH = 56;
     drawBrickWall(g, x0, y0, w, h, 10);
@@ -283,7 +287,6 @@ export class TurnBattleScene extends Phaser.Scene {
     for (let x = cx0 + 6; x < cx1 - 4; x += 12) g.fillRect(x, cy + ch / 2 - 1, 2, 2);
     wallShadow(g, x0, y0, w, h);
     drawBattleHud(g);
-    this.add.text(320, 40, '성채', text(10, '#a59db3', FONT_SMALL)).setOrigin(0.5, 0);
   }
 
   // 뒷벽에 걸린 팀 깃발: 금 막대 + 끝이 갈라진 천 + 가운데 줄
