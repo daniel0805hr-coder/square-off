@@ -3,12 +3,17 @@ import { chooseTurnAction } from '../logic/ai.js';
 import { TURN } from '../logic/balance.js';
 import { PIECE_NAMES } from '../logic/chess.js';
 import { InputRouter, keyLabels } from '../input/controls.js';
-import { FONT_SMALL, FONT_BIG, text, PLAYER_COLOR, PLAYER_HEX, SIDE_NAME, makePiece, endTitle } from '../ui/style.js';
+import { FONT_SMALL, FONT_BIG, text, PLAYER_COLOR, PLAYER_HEX, SIDE_NAME, endTitle } from '../ui/style.js';
+import { FighterView } from '../ui/fighter.js';
+import { UI, drawBattleHud, drawBrickWall, wallShadow } from '../ui/frame.js';
+import { FxLayer, FX, RAMP, duelEntrance } from '../ui/pixelfx.js';
 
 const ROLE_NAME = { attacker: '공격', defender: '수비' };
 const KEY_ACTION = { turnAttack: 'attack', turnDefend: 'defend', turnSkill: 'skill', turnFocus: 'focus', turnHeal: 'heal' };
 const SPOT_X = { 1: 190, 2: 450 }; // 백(P1) 왼쪽, 흑(P2) 오른쪽
 const SPOT_Y = 160;
+const FEET_Y = SPOT_Y + 12; // 2배 크기 말이 서는 바닥 (말 그림 가운데가 SPOT_Y 근처에 오게)
+const HEAD_Y = SPOT_Y - 40; // 말 머리 위 (피해 숫자 자리)
 const INTRO_TIME = 1.4;
 const REVEAL_FIRST_TIME = 1.0;
 const RESULT_TIME = 2.4;
@@ -38,9 +43,14 @@ export class TurnBattleScene extends Phaser.Scene {
     });
 
     this.drawHall();
+    this.pfx = new FxLayer(this, { depth: 5 });
+    // 성채 벽 양옆 횃불
+    for (const x of [35, 605]) this.pfx.play(FX.torch, { x, y: 214, flip: x > 320, seed: x }); // 벽에 걸린 횃불
     this.views = {};
     for (const f of this.battle.fighters) {
-      this.views[f.player] = makePiece(this, { x: SPOT_X[f.player], y: SPOT_Y }, f.piece, 12).setScale(2);
+      // 서로 마주 보게 (P1 왼쪽 → 오른쪽을 봄)
+      this.views[f.player] = new FighterView(this, { x: SPOT_X[f.player], y: FEET_Y }, f.piece,
+        { body: 12, color: PLAYER_COLOR[f.player] }).face(f.player === 1 ? 1 : -1).setScale(2);
     }
     this.drawHud();
     this.choiceText = {};
@@ -63,6 +73,7 @@ export class TurnBattleScene extends Phaser.Scene {
     const [a, d] = this.battle.fighters;
     this.banner.setText(`${PIECE_NAMES[a.type]} VS ${PIECE_NAMES[d.type]}`);
     this.cameras.main.fadeIn(300, 17, 16, 24);
+    if (this.duel) duelEntrance(this);
     this.refresh();
   }
 
@@ -184,15 +195,15 @@ export class TurnBattleScene extends Phaser.Scene {
   }
 
   floatText(player, msg, color) {
-    const v = this.views[player];
-    const t = this.add.text(v.x, v.y - 30, msg, text(12, color)).setOrigin(0.5).setStroke('#111018', 3).setDepth(9);
-    this.tweens.add({ targets: t, y: v.y - 54, alpha: 0, duration: 700, onComplete: () => t.destroy() });
+    const t = this.add.text(SPOT_X[player], HEAD_Y, msg, text(12, color)).setOrigin(0.5).setStroke('#111018', 3).setDepth(9);
+    this.tweens.add({ targets: t, y: HEAD_Y - 24, alpha: 0, duration: 700, onComplete: () => t.destroy() });
     this.refresh();
   }
 
   floatDamage(player, dmg) {
     this.cameras.main.shake(90, 0.006);
-    this.tweens.add({ targets: this.views[player], alpha: 0.3, duration: 80, yoyo: true, repeat: 1 });
+    this.pfx.play(FX.hitSpark, { x: SPOT_X[player], y: FEET_Y, height: FEET_Y - SPOT_Y, aim: player === 1 ? Math.PI : 0, palette: RAMP[3 - player] });
+    this.views[player].flash();
     this.floatText(player, `-${dmg}`, '#ffe08a');
   }
 
@@ -203,7 +214,15 @@ export class TurnBattleScene extends Phaser.Scene {
     this.center.setText(b.reason === 'ko' ? 'KO' : `${TURN.maxTurns}턴 종료 — 둘 다 제자리로`);
     for (const p of [1, 2]) this.choiceText[p].setText('');
     const loser = b.foeOf(winner);
-    this.views[loser.player].setAlpha(b.reason === 'ko' ? 0.25 : 0.6);
+    // KO = 맞은 쪽 바깥으로 쓰러짐, 턴 종료 = 흐리게
+    if (b.reason === 'ko') {
+      const x = SPOT_X[loser.player];
+      this.views[loser.player].fall(loser.player === 1 ? -1 : 1);
+      this.pfx.play(FX.critHit, { x, y: FEET_Y, height: FEET_Y - SPOT_Y, aim: loser.player === 1 ? Math.PI : 0, palette: RAMP[winner.player] });
+      this.time.delayedCall(250, () => this.pfx.play(FX.poof, { x, y: FEET_Y }));
+    } else {
+      this.views[loser.player].setAlpha(0.6);
+    }
     this.setPhase('end');
   }
 
@@ -223,22 +242,58 @@ export class TurnBattleScene extends Phaser.Scene {
 
   // ───────── 그리기 ─────────
 
+  // 성채 홀: 돌벽 테두리 안에 뒷벽(양 팀 깃발) + 돌바닥 + 두 말을 잇는 붉은 융단
   drawHall() {
     const g = this.add.graphics();
     g.fillStyle(0x111018).fillRect(0, 0, 640, 360);
-    const x0 = 40, y0 = 70, w = 560, h = 240;
-    g.fillStyle(STONE_LINE).fillRect(x0 - 4, y0 - 4, w + 8, h + 8);
-    // 돌바닥 타일
-    for (let y = y0; y < y0 + h; y += 20) {
+    const x0 = 40, y0 = 70, w = 560, h = 240, wallH = 56;
+    drawBrickWall(g, x0, y0, w, h, 10);
+    // 뒷벽: 큰 돌덩이 + 아래 몰딩
+    g.fillStyle(STONE_LINE).fillRect(x0, y0, w, wallH);
+    for (let y = y0, row = 0; y < y0 + wallH - 4; y += 13, row++) {
+      for (let x = x0 - (row % 2) * 14; x < x0 + w; x += 28) {
+        const l = Math.max(x0, x), r = Math.min(x0 + w, x + 27);
+        g.fillStyle(row % 2 ? STONE_DARK : 0x7a7d87).fillRect(l, y, r - l, 12);
+      }
+    }
+    g.fillStyle(0x9a9daa).fillRect(x0, y0 + wallH - 4, w, 1);
+    g.fillStyle(STONE_LINE).fillRect(x0, y0 + wallH - 3, w, 3);
+    for (const p of [1, 2]) this.drawBanner(g, SPOT_X[p], y0, PLAYER_COLOR[p]);
+    // 바닥: 엇갈린 돌판
+    const fy = y0 + wallH;
+    for (let y = fy; y < y0 + h; y += 20) {
       for (let x = x0; x < x0 + w + 40; x += 40) {
-        const off = ((y - y0) / 20) % 2 ? 20 : 0;
+        const off = ((y - fy) / 20) % 2 ? 20 : 0;
         const bx = x + off - 20;
         const left = Math.max(x0, bx), right = Math.min(x0 + w, bx + 40);
         if (right <= left) continue;
-        g.fillStyle(((x + y) / 20) % 3 ? STONE : STONE_DARK).fillRect(left, y, right - left - 1, 19);
+        g.fillStyle(((x + y) / 20) % 3 ? STONE : STONE_DARK).fillRect(left, y, right - left - 1, Math.min(19, y0 + h - y));
       }
     }
-    this.add.text(320, 40, '성채', text(10, '#8d8798', FONT_SMALL)).setOrigin(0.5, 0);
+    g.fillStyle(0x000000, 0.3).fillRect(x0, fy, w, 4); // 뒷벽 아래 그늘
+    // 융단: 두 말 발밑을 잇는 띠
+    const cx0 = SPOT_X[1] - 44, cx1 = SPOT_X[2] + 44, cy = FEET_Y - 16, ch = 30;
+    g.fillStyle(0x4a1018).fillRect(cx0, cy, cx1 - cx0, ch);
+    g.fillStyle(0x7a1c26).fillRect(cx0, cy + 2, cx1 - cx0, ch - 4);
+    g.fillStyle(UI.gold).fillRect(cx0, cy + 3, cx1 - cx0, 1).fillRect(cx0, cy + ch - 4, cx1 - cx0, 1);
+    for (let x = cx0 + 6; x < cx1 - 4; x += 12) g.fillRect(x, cy + ch / 2 - 1, 2, 2);
+    wallShadow(g, x0, y0, w, h);
+    drawBattleHud(g);
+    this.add.text(320, 40, '성채', text(10, '#a59db3', FONT_SMALL)).setOrigin(0.5, 0);
+  }
+
+  // 뒷벽에 걸린 팀 깃발: 금 막대 + 끝이 갈라진 천 + 가운데 줄
+  drawBanner(g, cx, top, color) {
+    const w = 22, h = 40, x = cx - w / 2;
+    g.fillStyle(UI.gold).fillRect(x - 3, top + 2, w + 6, 2);
+    g.fillStyle(color).fillRect(x, top + 4, w, h - 12);
+    // 갈라진 끝 (가운데가 V자로 파임)
+    for (let i = 0; i < 6; i++) {
+      g.fillRect(x, top + h - 8 + i, w / 2 - i, 1);
+      g.fillRect(x + w / 2 + i, top + h - 8 + i, w / 2 - i, 1);
+    }
+    g.fillStyle(0x000000, 0.3).fillRect(x + w - 5, top + 4, 5, h - 12);
+    g.fillStyle(0xffffff, 0.35).fillRect(x + w / 2 - 1, top + 8, 2, h - 20);
   }
 
   drawHud() {

@@ -3,11 +3,16 @@ import { BattleBot } from '../logic/ai.js';
 import { TOPDOWN as T } from '../logic/balance.js';
 import { PIECE_NAMES } from '../logic/chess.js';
 import { InputRouter, keyLabels } from '../input/controls.js';
-import { FONT_SMALL, FONT_BIG, text, C, PLAYER_COLOR, PLAYER_HEX, SIDE_NAME, makePiece, endTitle } from '../ui/style.js';
+import { FONT_SMALL, FONT_BIG, text, C, PLAYER_COLOR, PLAYER_HEX, SIDE_NAME, endTitle } from '../ui/style.js';
+import { FighterView } from '../ui/fighter.js';
+import { drawBattleHud, drawBrickWall, wallShadow } from '../ui/frame.js';
+import { FxLayer, FX, RAMP, duelEntrance } from '../ui/pixelfx.js';
 
 const ARENA_X = 320; // 아레나 중심 (화면 좌표)
 const ARENA_Y = 190;
 const ROLE_NAME = { attacker: '공격', defender: '수비' };
+const HEAD = 30; // 판정 중심에서 서 있는 말 머리 위까지 (글자 자리)
+const MID = 12;  // 판정 중심에서 말 몸통 가운데까지 (실드 자리)
 const SPECIAL_NAME = { P: '대시', N: '점프', B: '순간이동', R: '돌진', Q: '대시', K: '실드' };
 const INTRO_TIME = 1.4;
 const END_TIME = 1.8;
@@ -38,8 +43,12 @@ export class BattleScene extends Phaser.Scene {
 
     this.drawArena();
     this.fx = this.add.graphics().setDepth(2);
-    this.views = this.battle.fighters.map((f) => makePiece(this, this.toScreen(f), f.piece, f.body + 1).setDepth(3));
+    this.views = this.battle.fighters.map((f) => new FighterView(this, this.toScreen(f), f.piece,
+      { body: f.body, color: PLAYER_COLOR[f.player] }).face(f.fx).setDepth(3));
     this.top = this.add.graphics().setDepth(4); // 말 위에 그릴 것 (실드 등)
+    this.pfx = new FxLayer(this, { depth: 5 }); // 도트 이펙트 (타격 불꽃 등)
+    // 투기장 양옆 횃불 (위쪽 체력 바와 겹치지 않게 가운데 높이)
+    for (const x of [35, 605]) this.pfx.play(FX.torch, { x, y: 214, flip: x > 320, seed: x }); // 벽에 걸린 횃불
     this.stunText = this.battle.fighters.map(() => this.add.text(0, 0, '기절', text(10, '#ffe08a', FONT_SMALL))
       .setOrigin(0.5).setStroke('#111018', 3).setDepth(9).setVisible(false));
     this.drawHud();
@@ -53,10 +62,12 @@ export class BattleScene extends Phaser.Scene {
     this.subBanner.setText(this.duel ? '킹 결전 — 한쪽이 쓰러질 때까지!' : '준비…');
 
     this.cameras.main.fadeIn(300, 17, 16, 24);
+    if (this.duel) duelEntrance(this);
   }
 
   update(_time, deltaMs) {
     const dt = Math.min(deltaMs / 1000, 1 / 20); // 탭 전환 등으로 프레임이 튀어도 안전하게
+    this.dt = dt;
     this.phaseTime += dt;
 
     if (this.phase === 'intro') {
@@ -95,12 +106,12 @@ export class BattleScene extends Phaser.Scene {
 
   floatText(f, msg, color) {
     const pos = this.toScreen(f);
-    const t = this.add.text(pos.x, pos.y - 16, msg, text(12, color)).setOrigin(0.5).setStroke('#111018', 3).setDepth(9);
-    this.tweens.add({ targets: t, y: pos.y - 36, alpha: 0, duration: 650, onComplete: () => t.destroy() });
+    const t = this.add.text(pos.x, pos.y - HEAD, msg, text(12, color)).setOrigin(0.5).setStroke('#111018', 3).setDepth(9);
+    this.tweens.add({ targets: t, y: pos.y - HEAD - 20, alpha: 0, duration: 650, onComplete: () => t.destroy() });
   }
 
   ghost(f, at = f, duration = 250) {
-    const g = makePiece(this, this.toScreen(at), f.piece, f.body + 1).setAlpha(0.5).setDepth(1);
+    const g = new FighterView(this, this.toScreen(at), f.piece, { body: f.body, ring: false }).face(f.fx).setAlpha(0.5).setDepth(1);
     this.tweens.add({ targets: g, alpha: 0, duration, onComplete: () => g.destroy() });
   }
 
@@ -115,9 +126,12 @@ export class BattleScene extends Phaser.Scene {
     switch (ev.type) {
       case 'hit':
         this.cameras.main.shake(90, 0.008);
+        this.views[this.battle.fighters.indexOf(ev.to)].flash();
+        this.spark(ev.from, ev.to, RAMP[ev.from.player]);
         this.floatText(ev.to, `-${ev.damage}`, '#ffe08a');
         break;
       case 'blocked':
+        this.spark(ev.from, ev.to, RAMP.block);
         this.floatText(ev.to, '막힘!', '#9fd8ff');
         break;
       case 'dash':
@@ -145,11 +159,28 @@ export class BattleScene extends Phaser.Scene {
         this.banner.setText(endTitle(ev.winner, this.duel)).setColor(PLAYER_HEX[winner.player]);
         const retreat = ev.reason === 'time';
         this.subBanner.setText(retreat ? '시간 종료 — 둘 다 제자리로' : 'KO');
-        this.views[this.battle.fighters.indexOf(loser)].setAlpha(retreat ? 0.6 : 0.25);
+        const view = this.views[this.battle.fighters.indexOf(loser)];
+        // KO = 맞은 쪽 반대로 쓰러짐, 시간 종료 = 흐리게
+        if (retreat) view.setAlpha(0.6);
+        else { view.fall(loser.x >= winner.x ? 1 : -1); this.knockout(winner, loser); }
         break;
       }
       default:
     }
+  }
+
+  // 맞은 말 위에 타격 불꽃 (때린 방향으로 튐)
+  spark(from, to, palette, mod = FX.hitSpark) {
+    const pos = this.toScreen(to);
+    const aim = Math.atan2(to.y - from.y, to.x - from.x);
+    this.pfx.play(mod, { x: pos.x, y: pos.y + to.body, height: to.body + MID, aim, palette }); // 서 있는 말 몸통에
+  }
+
+  // KO: 큰 타격 + 쓰러진 말이 연기로 사라짐
+  knockout(winner, loser) {
+    this.spark(winner, loser, RAMP[winner.player], FX.critHit);
+    const pos = this.toScreen(loser);
+    this.time.delayedCall(250, () => this.pfx.play(FX.poof, { x: pos.x, y: pos.y + loser.body }));
   }
 
   // ───────── 그리기 ─────────
@@ -161,17 +192,23 @@ export class BattleScene extends Phaser.Scene {
   drawArena() {
     const { w, h } = T.arena;
     const g = this.add.graphics();
+    const x0 = ARENA_X - w / 2, y0 = ARENA_Y - h / 2;
     g.fillStyle(0x111018).fillRect(0, 0, 640, 360);
-    g.fillStyle(C.sandDark).fillRect(ARENA_X - w / 2 - 4, ARENA_Y - h / 2 - 4, w + 8, h + 8);
-    g.fillStyle(C.sand).fillRect(ARENA_X - w / 2, ARENA_Y - h / 2, w, h);
+    drawBrickWall(g, x0, y0, w, h, 10);
+    g.fillStyle(C.sand).fillRect(x0, y0, w, h);
+    wallShadow(g, x0, y0, w, h);
     // 모래 바닥 점 무늬
     const rnd = new Phaser.Math.RandomDataGenerator(['arena']);
     g.fillStyle(C.sandDark, 0.6);
     for (let i = 0; i < Math.round(w * h / 500); i++) {
       g.fillRect(Math.floor(ARENA_X - w / 2 + rnd.between(2, w - 4)), Math.floor(ARENA_Y - h / 2 + rnd.between(2, h - 4)), 2, 1);
     }
-    g.lineStyle(1, C.sandDark).strokeCircle(ARENA_X, ARENA_Y, 40);
-    this.add.text(320, 40, '투기장', text(10, '#8d8798', FONT_SMALL)).setOrigin(0.5, 0);
+    // 가운데 문양: 두 겹 원 + 네 방향 눈금
+    g.lineStyle(1, C.sandDark).strokeCircle(ARENA_X, ARENA_Y, 40).strokeCircle(ARENA_X, ARENA_Y, 34);
+    g.fillStyle(C.sandDark);
+    for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]]) g.fillRect(ARENA_X + dx * 44 - (dx ? 3 : 0), ARENA_Y + dy * 44 - (dy ? 3 : 0), dx ? 6 : 1, dy ? 6 : 1);
+    drawBattleHud(g);
+    this.add.text(320, 40, '투기장', text(10, '#a59db3', FONT_SMALL)).setOrigin(0.5, 0);
   }
 
   drawHud() {
@@ -240,14 +277,16 @@ export class BattleScene extends Phaser.Scene {
       const view = this.views[i];
       const col = PLAYER_COLOR[f.player];
 
-      // 점프: 그림자는 바닥에, 말은 위로 떠오름
+      // 점프: 발밑 링은 바닥에 남아 그림자가 되고, 말만 떠오름
       let lift = 0;
       if (f.jumpTime > 0) {
         const t = 1 - f.jumpTime / f.mv.special.time;
         lift = Math.sin(t * Math.PI) * 18;
-        g.fillStyle(0x000000, 0.25).fillEllipse(pos.x, pos.y + f.body * 0.6, f.body * 2, f.body);
       }
-      view.setPosition(pos.x, pos.y - lift).setScale(1 + lift / 60);
+      if (this.phase !== 'end' && this.phase !== 'done') {
+        view.face(f.fx).place(pos.x, pos.y, { lift, lean: f.attackTime > 0 ? f.fx : 0, dt: this.dt });
+        view.setDepth(3 + pos.y / 1000); // 아래쪽 말이 앞에
+      }
       // 맞은 직후 깜빡임 (대시·순간이동 무적은 깜빡이지 않음)
       if (this.phase === 'fight') {
         const blink = f.invuln > 0 && f.dashTime <= 0 && f.jumpTime <= 0 && Math.floor(f.invuln * 20) % 2;
@@ -275,11 +314,11 @@ export class BattleScene extends Phaser.Scene {
       }
       // 실드
       if (f.shieldTime > 0) {
-        top.lineStyle(2, 0x9fd8ff, 0.9).strokeCircle(pos.x, pos.y, f.body + 6);
-        top.fillStyle(0x9fd8ff, 0.18).fillCircle(pos.x, pos.y, f.body + 6);
+        top.lineStyle(2, 0x9fd8ff, 0.9).strokeCircle(pos.x, pos.y - MID, f.body + 8);
+        top.fillStyle(0x9fd8ff, 0.18).fillCircle(pos.x, pos.y - MID, f.body + 8);
       }
       // 기절
-      this.stunText[i].setVisible(f.stun > 0).setPosition(pos.x, pos.y - f.body - 10);
+      this.stunText[i].setVisible(f.stun > 0).setPosition(pos.x, pos.y - HEAD);
     });
   }
 }

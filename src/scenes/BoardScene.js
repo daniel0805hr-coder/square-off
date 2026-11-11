@@ -6,6 +6,8 @@ import { BOARD } from '../logic/balance.js';
 import { maxHp, currentHp, attackStat } from '../logic/units.js';
 import { TERRAIN } from '../logic/terrain.js';
 import { FONT_SMALL, FONT_BIG, text, C, PLAYER_OF, COLOR_OF, PLAYER_COLOR, PLAYER_HEX, SIDE_NAME, makePiece } from '../ui/style.js';
+import { FxLayer, FX, RAMP, NO_BODY } from '../ui/pixelfx.js';
+import { UI, UI_HEX, drawPanel, corners, windowAt, drawSelectBar } from '../ui/frame.js';
 
 const TILE = 32;
 const BOARD_X = 192;
@@ -16,7 +18,8 @@ const MENU = [
   { label: '2인 대전', ai: null },
   { label: '컴퓨터 상대 · 쉬움', ai: 'easy' },
   { label: '컴퓨터 상대 · 보통', ai: 'normal' },
-  { label: '온라인 · 방 만들기', online: true },
+  { label: '온라인 · 인터넷 방', online: 'peer' },
+  { label: '온라인 · 같은 네트워크(VPN) 방', online: 'lan' },
   { label: '키 설정', keys: true },
 ];
 const AI_PLAYER = 2;
@@ -44,6 +47,8 @@ export class BoardScene extends Phaser.Scene {
     this.boardGfx = this.add.graphics();
     this.pieceLayer = this.add.container(0, 0);
     this.overlay = this.add.container(0, 0).setDepth(10);
+    this.fx = new FxLayer(this, { depth: 5 }); // 말 위, 메뉴·안내 창 아래
+    this.halos = new Map(); // 베테랑 헤일로: 칸 → 이펙트
     this.drawStatic();
 
     new InputRouter(this, (cmd) => this.onCommand(cmd));
@@ -67,7 +72,7 @@ export class BoardScene extends Phaser.Scene {
 
   chooseMenu(i) {
     if (MENU[i].online) {
-      this.openRoom();
+      this.openRoom(MENU[i].online);
     } else if (MENU[i].keys) {
       this.scene.launch('keys');
       this.scene.sleep();
@@ -84,23 +89,28 @@ export class BoardScene extends Phaser.Scene {
   }
 
   // 온라인 방 만들기: 링크를 보여주고 친구를 기다린다. 친구가 들어오면 바로 2인 대전 (친구 = P2)
-  openRoom() {
+  //   kind: 'peer' = 인터넷 링크 방, 'lan' = 같은 와이파이·VPN 방 (src/net/online.js)
+  openRoom(kind) {
     if (this.room) {
       // 이미 친구와 연결된 상태면 바로 새 대전
       if (online.role === 'host') this.startGame(null);
       return;
     }
     this.mode = 'online';
-    this.onlineText = '연결 서버에 접속하는 중…';
+    const lan = kind === 'lan';
+    this.onlineText = lan ? '이 PC의 주소를 확인하는 중…' : '연결 서버에 접속하는 중…';
     this.panel = new HostPanel();
     this.panel.show(this.onlineText);
     this.room = hostRoom({
+      lan,
       game: this.game,
       onClick: (at) => this.onPointer(at, 'remote'),
       onStatus: (st) => {
         if (st.state === 'waiting') {
-          this.onlineText = '친구를 기다리는 중…\n아래 링크를 친구에게 보내세요';
-          this.panel.show('방 링크', st.link);
+          this.onlineText = lan
+            ? '친구를 기다리는 중…\n아래 주소 중 친구와 같은 네트워크(VPN) 주소를 보내세요'
+            : '친구를 기다리는 중…\n아래 링크를 친구에게 보내세요';
+          this.panel.show(lan ? '친구 PC에서 열 주소' : '방 링크', st.links);
         } else if (st.state === 'joined') {
           this.panel.show('온라인 · 친구(P2) 연결됨');
           this.newGame();
@@ -216,7 +226,7 @@ export class BoardScene extends Phaser.Scene {
     if (who === 'remote' && online.role !== 'host') return;
     if (this.mode === 'menu') {
       if (who === 'remote') return; // 메뉴는 호스트만
-      const i = MENU.findIndex((_, j) => Math.abs(pointer.y - this.menuY(j)) <= 9 && Math.abs(pointer.x - 320) <= 90);
+      const i = MENU.findIndex((_, j) => Math.abs(pointer.y - this.menuY(j)) <= 9 && Math.abs(pointer.x - 320) <= 115);
       if (i >= 0) { this.menuIndex = i; this.chooseMenu(i); }
       return;
     }
@@ -274,6 +284,8 @@ export class BoardScene extends Phaser.Scene {
   finishMove(from, to, promotion, outcome, hp) {
     const rec = this.chess.move(from, to, promotion, outcome, hp);
     this.mode = this.chess.result ? 'over' : 'select';
+    if (rec?.promotion) this.fxAt(FX.holyPillar, rec.to, { shafts: 5 });
+    for (const sq of rec?.healed || []) this.fxAt(FX.collectBurst, sq, { palette: RAMP.heal }, 33);
     if (rec?.captured) {
       const atk = PIECE_NAMES[rec.piece.type], def = PIECE_NAMES[rec.captured.type];
       const reward = hp?.noReward ? '' : ` (HP +${BOARD.winReward / 10}칸)`;
@@ -294,12 +306,15 @@ export class BoardScene extends Phaser.Scene {
 
   // 수가 끝난 뒤: 체크메이트면 결전, 아니면 다음 차례 (컴퓨터면 둔다)
   afterTurn() {
+    const won = this.chess.result?.winner;
+    if (won) this.fx.play(FX.confetti, { x: 320, y: BOARD_Y + 200 });
     if (this.chess.duel) this.startDuel();
     else this.maybeAiTurn();
   }
 
   chooseVeteran(choice) {
     this.chess.promoteVeteran(this.vet.square, choice);
+    this.fxAt(FX.collectBurst, this.vet.square, { palette: RAMP.gold }, 33);
     this.say(`베테랑 승격! ${choice === 'hp' ? '최대 HP +1칸' : '공격 +1'}`);
     this.vet = null;
     this.mode = 'select';
@@ -313,9 +328,14 @@ export class BoardScene extends Phaser.Scene {
     this.render();
     const { x, y } = this.tileCenter(move.capturedSquare);
     const cam = this.cameras.main;
-    cam.pan(x, y, 450, 'Sine.easeIn');
-    cam.zoomTo(6, 450, 'Sine.easeIn');
-    cam.fadeOut(450, 17, 16, 24);
+    // 두 말이 칸 위에서 맞붙는 불꽃 → 그 칸 속으로 줌인
+    this.fx.play(FX.parry, { x, y: y + 6, height: 6 });
+    cam.shake(120, 0.004);
+    this.time.delayedCall(280, () => {
+      cam.pan(x, y, 450, 'Sine.easeIn');
+      cam.zoomTo(6, 450, 'Sine.easeIn');
+      cam.fadeOut(450, 17, 16, 24);
+    });
     cam.once('camerafadeoutcomplete', () => {
       const bot = this.ai ? { player: AI_PLAYER, level: this.ai } : null;
       const shields = { w: !this.chess.shieldUsed.w, b: !this.chess.shieldUsed.b };
@@ -341,6 +361,8 @@ export class BoardScene extends Phaser.Scene {
     const cam = this.cameras.main;
     cam.shake(500, 0.006);
     cam.flash(200, 255, 80, 60);
+    const k = this.tileCenter(d.king);
+    this.fx.play(FX.critHit, { x: k.x, y: k.y + 8, height: 8, palette: RAMP.duel });
     this.time.delayedCall(1100, () => {
       const { x, y } = this.tileCenter(d.king);
       cam.pan(x, y, 450, 'Sine.easeIn');
@@ -362,6 +384,7 @@ export class BoardScene extends Phaser.Scene {
     const cam = this.cameras.main;
     cam.setZoom(1).centerOn(320, 180);
     cam.fadeIn(300, 17, 16, 24);
+    this.fx.clearOneShots(); // 줌인하며 멈춰 있던 충돌 불꽃이 돌아와서 다시 재생되지 않게
     for (const color of Object.keys(shieldUsed || {})) this.chess.shieldUsed[color] = true;
     if (this.duelPending) {
       this.duelPending = false;
@@ -376,6 +399,8 @@ export class BoardScene extends Phaser.Scene {
     this.pendingMove = null;
     // KO = 진 쪽 제거, 시간 종료 = 방어 성공이지만 둘 다 제자리
     const outcome = winner === 'attacker' ? 'attacker' : reason === 'time' ? 'retreat' : 'defender';
+    // 쓰러진 말이 있던 칸에 연기
+    if (outcome !== 'retreat') this.fxAt(FX.poof, outcome === 'attacker' ? to : from);
     this.finishMove(from, to, promotion, outcome, hp);
     this.render();
   }
@@ -390,36 +415,61 @@ export class BoardScene extends Phaser.Scene {
 
   // 바뀌지 않는 것: 패널 테두리, 좌표 글자, 제목
   drawStatic() {
-    const g = this.add.graphics();
+    const g = this.add.graphics().setDepth(-1); // 패널·판 틀은 칸·말 아래
     for (const x of [12, 468]) {
-      g.fillStyle(C.panel).fillRect(x, BOARD_Y, 160, 256);
-      g.lineStyle(1, C.panelLine).strokeRect(x + 0.5, BOARD_Y + 0.5, 159, 255);
+      drawPanel(g, x, BOARD_Y, 160, 256);
+      // 머리 띠 + 구역 구분선
+      g.fillStyle(UI.panelHi).fillRect(x + 2, BOARD_Y + 2, 156, 21);
+      g.fillStyle(UI.rule);
+      for (const y of [23, 134, 186]) g.fillRect(x + 8, BOARD_Y + y, 144, 1);
     }
-    for (let i = 0; i < 8; i++) {
-      this.add.text(BOARD_X - 10, BOARD_Y + i * TILE + 10, String(8 - i), text(10, '#8d8798', FONT_SMALL));
-      this.add.text(BOARD_X + i * TILE + 13, BOARD_Y + 260, 'abcdefgh'[i], text(10, '#8d8798', FONT_SMALL));
+    this.drawBoardFrame(g);
+    // 제목: 금빛 글자 + 양옆 장식 선
+    this.add.text(320, 12, 'SQUARE OFF', text(15, UI_HEX.title, FONT_BIG)).setOrigin(0.5, 0)
+      .setStroke('#0b0a10', 3).setLetterSpacing(2);
+    g.fillStyle(UI.gold);
+    for (const sx of [-1, 1]) {
+      g.fillRect(320 + sx * 70 - (sx < 0 ? 26 : 0), 21, 26, 1);
+      g.fillRect(320 + sx * 98 - 1, 20, 3, 3); // 끝 마름모 점
     }
-    this.add.text(320, 14, 'SQUARE OFF', text(15, '#f2ead8', FONT_BIG)).setOrigin(0.5, 0);
-    this.add.text(320, 34, '말들의 반란 · 7단계: 링크 온라인', text(10, '#8d8798', FONT_SMALL)).setOrigin(0.5, 0);
+    this.add.text(320, 32, '말들의 반란', text(10, UI_HEX.muted, FONT_SMALL)).setOrigin(0.5, 0);
 
     this.panelTexts = {};
+    this.capturedLayer = this.add.container(0, 0);
     for (const player of [1, 2]) {
       const x = player === 1 ? 22 : 478;
       const color = COLOR_OF[player];
-      this.add.text(x, BOARD_Y + 10, `P${player} · ${SIDE_NAME[color]}`, text(12, PLAYER_HEX[player]));
+      this.add.text(x, BOARD_Y + 6, `P${player} · ${SIDE_NAME[color]}`, text(12, PLAYER_HEX[player]));
       this.panelTexts[player] = {
-        turn: this.add.text(x + 140, BOARD_Y + 10, '', text(12, '#f2ead8')).setOrigin(1, 0),
-        captured: this.add.text(x, BOARD_Y + 40, '', { ...text(10, '#d8d2c4', FONT_SMALL), wordWrap: { width: 140 } }),
-        log: this.add.text(x, BOARD_Y + 84, '', { ...text(10, '#b3adbd', FONT_SMALL), lineSpacing: 2 }),
-        info: this.add.text(x, BOARD_Y + 132, '', { ...text(10, '#d8d2c4', FONT_SMALL), lineSpacing: 2 }),
+        turn: this.add.text(x + 140, BOARD_Y + 6, '', text(12, PLAYER_HEX[player])).setOrigin(1, 0),
+        captured: this.add.text(x, BOARD_Y + 46, '', text(10, UI_HEX.muted, FONT_SMALL)),
+        log: this.add.text(x, BOARD_Y + 94, '', { ...text(10, UI_HEX.body, FONT_SMALL), lineSpacing: 2 }),
+        info: this.add.text(x, BOARD_Y + 140, '', { ...text(10, UI_HEX.body, FONT_SMALL), lineSpacing: 2 }),
       };
-      this.add.text(x, BOARD_Y + 28, '잡은 말', text(10, '#8d8798', FONT_SMALL));
-      this.add.text(x, BOARD_Y + 72, '최근 수', text(10, '#8d8798', FONT_SMALL));
-      this.panelTexts[player].keys = this.add.text(x, BOARD_Y + 186, '',
-        { ...text(10, '#8d8798', FONT_SMALL), lineSpacing: 1, wordWrap: { width: 140 } });
+      this.add.text(x, BOARD_Y + 28, '잡은 말', text(10, UI_HEX.label, FONT_SMALL));
+      this.add.text(x, BOARD_Y + 80, '최근 수', text(10, UI_HEX.label, FONT_SMALL));
+      this.panelTexts[player].keys = this.add.text(x, BOARD_Y + 192, '',
+        { ...text(10, UI_HEX.muted, FONT_SMALL), lineSpacing: 1, wordWrap: { width: 140 } });
     }
-    this.statusText = this.add.text(320, 334, '', text(12, '#f2ead8')).setOrigin(0.5, 0);
+    this.statusText = this.add.text(320, 336, '', text(12, UI_HEX.text)).setOrigin(0.5, 0).setStroke('#0b0a10', 3);
     this.panelFrame = this.add.graphics();
+  }
+
+  // 판 테두리: 흑단 틀 + 안쪽 금 띠 + 모서리 금 장식, 좌표는 틀 위에
+  drawBoardFrame(g) {
+    const B = 12, x = BOARD_X - B, y = BOARD_Y - B, s = TILE * 8 + B * 2;
+    g.fillStyle(UI.ink).fillRect(x - 1, y - 1, s + 2, s + 2);
+    g.fillStyle(UI.wood).fillRect(x, y, s, s);
+    g.fillStyle(UI.woodHi).fillRect(x, y, s, 1).fillRect(x, y, 1, s);
+    g.fillStyle(UI.gold).fillRect(BOARD_X - 3, BOARD_Y - 3, TILE * 8 + 6, 1).fillRect(BOARD_X - 3, BOARD_Y + TILE * 8 + 2, TILE * 8 + 6, 1)
+      .fillRect(BOARD_X - 3, BOARD_Y - 3, 1, TILE * 8 + 6).fillRect(BOARD_X + TILE * 8 + 2, BOARD_Y - 3, 1, TILE * 8 + 6);
+    g.fillStyle(UI.ink).fillRect(BOARD_X - 1, BOARD_Y - 1, TILE * 8 + 2, 1).fillRect(BOARD_X - 1, BOARD_Y + TILE * 8, TILE * 8 + 2, 1)
+      .fillRect(BOARD_X - 1, BOARD_Y - 1, 1, TILE * 8 + 2).fillRect(BOARD_X + TILE * 8, BOARD_Y - 1, 1, TILE * 8 + 2);
+    corners(g, x + 2, y + 2, s - 4, s - 4, UI.goldHi);
+    for (let i = 0; i < 8; i++) {
+      this.add.text(BOARD_X - 6, BOARD_Y + i * TILE + 16, String(8 - i), text(10, UI_HEX.gold, FONT_SMALL)).setOrigin(0.5);
+      this.add.text(BOARD_X + i * TILE + 16, BOARD_Y + TILE * 8 + 6, 'abcdefgh'[i], text(10, UI_HEX.gold, FONT_SMALL)).setOrigin(0.5);
+    }
   }
 
   render() {
@@ -436,15 +486,16 @@ export class BoardScene extends Phaser.Scene {
       }
     }
     // 직전 수
+    //   칸 표시는 옅은 색 + 안쪽 테두리: 지형 질감이 비쳐 보이게
     if (last) {
-      for (const sq of [last.from, last.to]) this.fillTile(gfx, sq, C.lastMove, 0.45);
+      for (const sq of [last.from, last.to]) this.markTile(gfx, sq, C.lastMove, 0.3);
     }
     // 직전 수에서 킹 옆이라 회복된 말
-    for (const sq of last?.healed || []) this.fillTile(gfx, sq, C.heal, 0.45);
+    for (const sq of last?.healed || []) this.markTile(gfx, sq, C.heal, 0.35);
     // 체크된 킹
-    if (g.inCheck(g.turn)) this.fillTile(gfx, g.findKing(g.turn), C.check, 0.7);
+    if (g.inCheck(g.turn)) this.markTile(gfx, g.findKing(g.turn), C.check, 0.55, 2);
     // 선택한 말
-    if (this.selected) this.fillTile(gfx, this.selected, C.select, 0.6);
+    if (this.selected) this.markTile(gfx, this.selected, C.select, 0.45, 2);
     // 갈 수 있는 칸: 빈 칸은 점, 잡을 수 있는 칸은 테두리
     for (const m of moves) {
       const { x, y } = this.tileCenter(m.to);
@@ -465,6 +516,7 @@ export class BoardScene extends Phaser.Scene {
         if (p) this.pieceLayer.add(this.makeBoardPiece({ r, c }, p));
       }
     }
+    this.syncHalos();
 
     this.renderPanels();
     this.renderOverlay();
@@ -477,7 +529,8 @@ export class BoardScene extends Phaser.Scene {
     const x = BOARD_X + sq.c * TILE, y = BOARD_Y + sq.r * TILE;
     const col = TERRAIN_COLOR[kind];
     gfx.fillStyle(light ? col.light : col.dark).fillRect(x, y, TILE, TILE);
-    gfx.fillStyle(col.mark, 0.7);
+    this.drawTileTexture(gfx, kind, x, y, sq, light ? col.dark : col.mark);
+    gfx.fillStyle(col.mark, 0.85);
     if (kind === 'arena') {
       // 검: 대각선 칼날 + 가드
       for (let i = 0; i < 6; i++) gfx.fillRect(x + 3 + i, y + 9 - i, 1, 1);
@@ -495,11 +548,30 @@ export class BoardScene extends Phaser.Scene {
     }
   }
 
-  // 판 위 말: 동그라미 + 다쳤으면 HP 눈금, 베테랑이면 별
+  // 지형 질감 (칸마다 정해진 무늬라 다시 그려도 그대로): 모래 알갱이 · 돌판 줄눈 · 풀 포기
+  drawTileTexture(gfx, kind, x, y, { r, c }, ink) {
+    const h = (i) => ((r * 8 + c) * 73 + i * 151) % 997; // 칸·번호별 고정 난수 0~996
+    if (kind === 'arena') {
+      gfx.fillStyle(ink, 0.35);
+      for (let i = 0; i < 6; i++) gfx.fillRect(x + 2 + (h(i) % 28), y + 12 + (h(i + 9) % 18), (i % 2) + 1, 1);
+    } else if (kind === 'fortress') {
+      // 돌판 두 장씩 엇갈려 쌓은 줄눈
+      gfx.fillStyle(ink, 0.3).fillRect(x, y + 15, TILE, 1).fillRect(x + 20, y, 1, 15).fillRect(x + 9, y + 16, 1, 16)
+        .fillRect(x + 25, y + 16, 1, 16);
+      gfx.fillStyle(0xffffff, 0.12).fillRect(x, y + 16, TILE, 1);
+    } else if (kind === 'forest') {
+      gfx.fillStyle(ink, 0.45);
+      for (let i = 0; i < 3; i++) {
+        const tx = x + 4 + (h(i) % 24), ty = y + 14 + (h(i + 5) % 14);
+        gfx.fillRect(tx, ty, 1, 2).fillRect(tx + 2, ty, 1, 2).fillRect(tx + 1, ty - 1, 1, 3);
+      }
+    }
+  }
+
+  // 판 위 말: 도트 말 + 다쳤으면 HP 눈금, 베테랑이면 별 (금 테두리는 말 그림에 있음)
   makeBoardPiece(sq, p) {
     const ctr = makePiece(this, this.tileCenter(sq), p);
     if (p.vet) {
-      ctr.addAt(this.add.circle(0, 0, 14).setStrokeStyle(2, C.gold), 0);
       ctr.add(this.add.text(9, -15, '★', text(10, '#ffd34a', FONT_SMALL)).setStroke('#111018', 2));
     }
     const hp = currentHp(p), max = maxHp(p);
@@ -518,6 +590,32 @@ export class BoardScene extends Phaser.Scene {
     return ctr;
   }
 
+  // 칸 가운데에 이펙트 (이펙트 원점 = 바닥이라 말 아래쪽에 둔다)
+  //   dy: 이펙트마다 그림 중심이 원점에서 떨어진 정도가 달라 칸 가운데에 맞추는 값
+  fxAt(mod, sq, o = {}, dy = 12) {
+    const { x, y } = this.tileCenter(sq);
+    return this.fx.play(mod, { x, y: y + dy, height: 12, ...o });
+  }
+
+  // 베테랑 말 머리 위 금빛 헤일로. 칸마다 하나, 말이 떠나면 서서히 꺼진다
+  syncHalos() {
+    const keep = new Set();
+    for (let r = 0; r < 8; r++) {
+      for (let c = 0; c < 8; c++) {
+        if (!this.chess.board[r][c]?.vet) continue;
+        const key = `${r},${c}`;
+        keep.add(key);
+        if (this.halos.has(key)) continue;
+        const { x, y } = this.tileCenter({ r, c });
+        // 헤일로는 원점보다 46px 위에 뜬다 → 말 동그라미 바로 위(-16)에 오게
+        this.halos.set(key, this.fx.play(FX.halo, { x, y: y + 30, actor: NO_BODY, seed: r * 8 + c }));
+      }
+    }
+    for (const [key, fx] of this.halos) {
+      if (!keep.has(key)) { fx.stop(); this.halos.delete(key); }
+    }
+  }
+
   // 커서가 가리키는 칸 정보: 지형 + 말
   pieceInfo(sq) {
     if (!sq) return '';
@@ -528,28 +626,38 @@ export class BoardScene extends Phaser.Scene {
     return `${SIDE_NAME[p.color]} ${PIECE_NAMES[p.type]}${vet} · ${t.name}\nHP ${currentHp(p)}/${maxHp(p)} · 공격 ${attackStat(p)}`;
   }
 
+  // 잡은 말: 실제 말 그림을 겹쳐 세운 줄 (많아지면 더 촘촘하게)
+  drawCaptured(x, types, color) {
+    const step = types.length > 1 ? Math.min(14, 118 / (types.length - 1)) : 0;
+    types.forEach((type, i) => this.capturedLayer.add(makePiece(this, { x: x + 12 + Math.round(i * step), y: BOARD_Y + 54 }, { type, color })));
+  }
+
   renderPanels() {
     const g = this.chess;
     const frame = this.panelFrame.clear();
+    this.capturedLayer.removeAll(true);
     for (const player of [1, 2]) {
       const color = COLOR_OF[player];
       const t = this.panelTexts[player];
       const active = this.mode !== 'over' && g.turn === color;
-      t.turn.setText(active && this.mode !== 'menu' ? '차례 ◀' : '');
+      t.turn.setText(active && this.mode !== 'menu' ? '차례' : '');
       const keys = keyLabels(player);
       t.keys.setText(online.role === 'host' && player === 2 ? '온라인 친구가 조종\n(친구 자기 키 설정 사용)'
         : this.isAi(player) ? `컴퓨터가 조종\n난이도: ${BOT_LEVELS[this.ai].name}`
         : `이동  ${keys.move}\n선택·공격  ${keys.confirm}\n스킬  ${keys.skill}\n취소  ${keys.cancel}`);
-      const took = g.captured[color === WHITE ? BLACK : WHITE];
-      t.captured.setText(took.length ? took.map((k) => PIECE_NAMES[k]).join(' ') : '-');
+      const foe = color === WHITE ? BLACK : WHITE;
+      const took = g.captured[foe];
+      t.captured.setText(took.length ? '' : '아직 없음');
+      this.drawCaptured(player === 1 ? 22 : 478, took, foe);
       const mine = g.history.filter((m) => m.piece.color === color).slice(-3);
       t.log.setText(mine.map((m) => m.notation).join('\n'));
       const shield = `킹 실드: ${g.shieldUsed[color] ? '사용함' : '1회 남음'}`;
       const look = active && this.mode === 'select' ? this.pieceInfo(this.cursor[player]) : '';
       t.info.setText(look ? `${look}\n${shield}` : shield);
-      if (active) {
+      if (active && this.mode !== 'menu') {
         const x = player === 1 ? 12 : 468;
         frame.lineStyle(2, PLAYER_COLOR[player]).strokeRect(x + 1, BOARD_Y + 1, 158, 254);
+        corners(frame, x - 1, BOARD_Y - 1, 162, 258, UI.goldHi);
       }
     }
 
@@ -568,15 +676,16 @@ export class BoardScene extends Phaser.Scene {
     this.overlay.removeAll(true);
     const g = this.chess;
     if (this.mode === 'menu') {
-      this.overlay.add(this.add.rectangle(320, BOARD_Y + 139, 200, 130, 0x111018, 0.94).setStrokeStyle(1, 0xf2ead8));
+      const top = this.menuY(0) - 20, bottom = this.menuY(MENU.length - 1) + 20;
+      this.overlay.add(windowAt(this, 320, (top + bottom) / 2, 236, bottom - top));
+      this.overlay.add(drawSelectBar(this.add.graphics(), 320, this.menuY(this.menuIndex), 216));
       MENU.forEach((item, i) => {
         const on = i === this.menuIndex;
-        this.overlay.add(this.add.text(320, this.menuY(i), (on ? '▶ ' : '') + item.label,
-          text(12, on ? '#f2ead8' : '#8d8798')).setOrigin(0.5));
+        this.overlay.add(this.add.text(320, this.menuY(i), item.label, text(12, on ? UI_HEX.title : UI_HEX.label)).setOrigin(0.5));
       });
     }
     if (this.mode === 'online') {
-      this.overlay.add(this.add.rectangle(320, BOARD_Y + 128, 228, 124, 0x111018, 0.94).setStrokeStyle(1, 0xf2ead8));
+      this.overlay.add(windowAt(this, 320, BOARD_Y + 128, 232, 128));
       this.overlay.add(this.add.text(320, BOARD_Y + 74, '온라인 · 방 만들기', text(12, '#f2ead8')).setOrigin(0.5, 0));
       this.overlay.add(this.add.text(320, BOARD_Y + 96, this.onlineText,
         { ...text(10, '#d8d2c4', FONT_SMALL), align: 'center', lineSpacing: 3, wordWrap: { width: 208, useAdvancedWrap: true } }).setOrigin(0.5, 0));
@@ -584,7 +693,7 @@ export class BoardScene extends Phaser.Scene {
     }
     if (this.mode === 'veteran') {
       const col = PLAYER_COLOR[this.vet.player];
-      this.overlay.add(this.add.rectangle(320, BOARD_Y + 128, 200, 76, 0x111018, 0.94).setStrokeStyle(1, C.gold));
+      this.overlay.add(windowAt(this, 320, BOARD_Y + 128, 204, 80, { accent: C.gold }));
       this.overlay.add(this.add.text(320, BOARD_Y + 98, '★ 베테랑 승격 ★', text(12, '#ffd34a')).setOrigin(0.5, 0));
       VETERAN_CHOICES.forEach((choice, i) => {
         const x = this.vetX(i), on = i === this.vet.index;
@@ -595,7 +704,7 @@ export class BoardScene extends Phaser.Scene {
     }
     if (this.mode === 'promotion') {
       const color = g.turn;
-      this.overlay.add(this.add.rectangle(320, BOARD_Y + 128, 176, 64, 0x111018, 0.92).setStrokeStyle(1, PLAYER_COLOR[this.currentPlayer]));
+      this.overlay.add(windowAt(this, 320, BOARD_Y + 128, 180, 68, { accent: PLAYER_COLOR[this.currentPlayer] }));
       PROMOTION_TYPES.forEach((type, i) => {
         const x = this.promoX(i);
         if (i === this.promo.index) this.overlay.add(this.add.rectangle(x, BOARD_Y + 122, 32, 32).setStrokeStyle(2, PLAYER_COLOR[this.currentPlayer]));
@@ -607,7 +716,7 @@ export class BoardScene extends Phaser.Scene {
       const r = g.result;
       const title = r.type === 'kingslain' ? `킹이 쓰러졌다! ${SIDE_NAME[r.winner]}(P${PLAYER_OF[r.winner]}) 승리`
         : r.type === 'stalemate' ? '스테일메이트 — 무승부' : '기물 부족 — 무승부';
-      this.overlay.add(this.add.rectangle(320, BOARD_Y + 128, 240, 72, 0x111018, 0.92).setStrokeStyle(1, 0xf2ead8));
+      this.overlay.add(windowAt(this, 320, BOARD_Y + 128, 244, 76));
       this.overlay.add(this.add.text(320, BOARD_Y + 106, title, text(12, '#f2ead8')).setOrigin(0.5, 0));
       this.overlay.add(this.add.text(320, BOARD_Y + 132, `선택 키(${keyLabels(1).confirm} / ${keyLabels(2).confirm}) → 메뉴`, text(10, '#8d8798', FONT_SMALL)).setOrigin(0.5, 0));
     }
@@ -637,5 +746,13 @@ export class BoardScene extends Phaser.Scene {
 
   fillTile(gfx, { r, c }, color, alpha) {
     gfx.fillStyle(color, alpha).fillRect(BOARD_X + c * TILE, BOARD_Y + r * TILE, TILE, TILE);
+  }
+
+  // 칸 표시: 옅은 색 + 안쪽 테두리 (width px)
+  markTile(gfx, sq, color, alpha, width = 1) {
+    this.fillTile(gfx, sq, color, alpha);
+    const x = BOARD_X + sq.c * TILE, y = BOARD_Y + sq.r * TILE;
+    gfx.fillStyle(color).fillRect(x, y, TILE, width).fillRect(x, y + TILE - width, TILE, width)
+      .fillRect(x, y, width, TILE).fillRect(x + TILE - width, y, width, TILE);
   }
 }

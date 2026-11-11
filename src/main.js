@@ -10,11 +10,15 @@ await Promise.all([
   document.fonts.load('10px Galmuri9'),
 ]).catch(() => {});
 
-// ?room=코드 링크로 들어온 친구는 게임을 돌리지 않고 호스트 화면을 받아 본다 (src/net/online.js)
-const room = new URLSearchParams(location.search).get('room');
-if (room) {
+// 링크로 들어온 친구는 게임을 돌리지 않고 호스트 화면을 받아 본다 (src/net/online.js)
+//   ?room=코드 = 인터넷 링크 방, ?lan=1 = 같은 네트워크(LAN·VPN) 방
+const params = new URLSearchParams(location.search);
+if (params.has('room')) {
   const { joinRoom } = await import('./net/online.js');
-  joinRoom(room, document.getElementById('game'));
+  joinRoom(params.get('room'), document.getElementById('game'));
+} else if (params.has('lan')) {
+  const { joinLan } = await import('./net/online.js');
+  joinLan(document.getElementById('game'));
 } else {
   startGame();
 }

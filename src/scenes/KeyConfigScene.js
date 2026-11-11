@@ -1,5 +1,6 @@
 import { InputRouter, ACTIONS, ACTION_NAMES, actionLabel, setBinding, resetBindings, mouseCode } from '../input/controls.js';
 import { FONT_SMALL, FONT_BIG, text, C, PLAYER_COLOR, PLAYER_HEX } from '../ui/style.js';
+import { UI, UI_HEX, drawPanel } from '../ui/frame.js';
 
 const COL_X = { 1: 110, 2: 340 }; // 각 플레이어 칸의 왼쪽 끝
 const COL_W = 190;
@@ -18,12 +19,19 @@ export class KeyConfigScene extends Phaser.Scene {
     this.sel = { row: 0, col: 0 }; // col 0 = P1, 1 = P2
     this.listening = false;
 
-    this.add.graphics().fillStyle(0x111018).fillRect(0, 0, 640, 360);
-    this.add.text(320, 10, '키 설정', text(15, '#f2ead8', FONT_BIG)).setOrigin(0.5, 0);
+    const bg = this.add.graphics().fillStyle(0x111018).fillRect(0, 0, 640, 360);
+    // 플레이어마다 패널 하나 (머리 띠에 P1/P2)
+    const bottom = ROW_Y + (BUTTON_ROW + 1) * ROW_H + 10;
     for (const p of [1, 2]) {
-      this.add.text(COL_X[p] + COL_W / 2, 44, `P${p}`, text(12, PLAYER_HEX[p])).setOrigin(0.5, 0);
+      drawPanel(bg, COL_X[p] - 10, 38, COL_W + 20, bottom - 38);
+      bg.fillStyle(UI.panelHi).fillRect(COL_X[p] - 8, 40, COL_W + 16, 18);
     }
-    this.help = this.add.text(320, 326, '', text(10, '#8d8798', FONT_SMALL)).setOrigin(0.5, 0);
+    this.add.text(320, 10, '키 설정', text(15, UI_HEX.title, FONT_BIG)).setOrigin(0.5, 0).setStroke('#0b0a10', 3);
+    bg.fillStyle(UI.gold).fillRect(262, 19, 22, 1).fillRect(356, 19, 22, 1);
+    for (const p of [1, 2]) {
+      this.add.text(COL_X[p] + COL_W / 2, 42, `P${p}`, text(12, PLAYER_HEX[p])).setOrigin(0.5, 0);
+    }
+    this.help = this.add.text(320, 326, '', text(10, UI_HEX.muted, FONT_SMALL)).setOrigin(0.5, 0);
     this.gfx = this.add.graphics();
     this.cells = [];
 

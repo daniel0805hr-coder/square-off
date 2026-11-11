@@ -3,5 +3,6 @@
 .impeccable/
 node_modules/
 
-# 기획서는 공개 저장소에 올리지 않는다
+# 기획서·제품 정리는 공개 저장소에 올리지 않는다
 기획서.md
+PRODUCT.md

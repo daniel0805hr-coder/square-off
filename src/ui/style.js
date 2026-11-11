@@ -1,5 +1,6 @@
-// 여러 화면이 같이 쓰는 글꼴·색·임시 말 그림
-import { WHITE, BLACK, PIECE_NAMES } from '../logic/chess.js';
+// 여러 화면이 같이 쓰는 글꼴·색·말 그림
+import { WHITE, BLACK } from '../logic/chess.js';
+import { pieceRGBA, SIZE } from './pieceArt.js';
 
 export const FONT = 'Galmuri11';
 export const FONT_SMALL = 'Galmuri9';
@@ -9,7 +10,6 @@ export const text = (size, color, family = FONT) => ({ fontFamily: family, fontS
 export const C = {
   light: 0xd8c8a8, dark: 0x8a6a4a,
   lastMove: 0xe8d36a, check: 0xd84a3a, select: 0xfff2a0, dot: 0x2b2420,
-  whiteFill: 0xf2ead8, whiteLine: 0x3a2f25, blackFill: 0x2a2230, blackLine: 0xc8b89a,
   panel: 0x26242f, panelLine: 0x3a3746,
   sand: 0xc9a86a, sandDark: 0xa8864e,
   heal: 0x6fd36f, gold: 0xffd34a,
@@ -20,12 +20,23 @@ export const PLAYER_COLOR = { 1: 0x5aa0ff, 2: 0xff6a5a };
 export const PLAYER_HEX = { 1: '#5aa0ff', 2: '#ff6a5a' };
 export const SIDE_NAME = { [WHITE]: '백', [BLACK]: '흑' };
 
-// 임시 말: 동그라미 + 한 글자 (에셋 정하기 전까지)
+// 말 그림 텍스처 (그림은 ui/pieceArt.js). 처음 쓸 때 한 번 만들어 모든 화면이 같이 쓴다
+//   look: { flash, shadow } — 전투용 변형 (ui/fighter.js)
+export function pieceTexture(scene, { type, color, vet }, { flash = false, shadow = true } = {}) {
+  const key = `piece-${color}${type}${vet ? '-vet' : ''}${flash ? '-flash' : ''}${shadow ? '' : '-noshadow'}`;
+  if (!scene.textures.exists(key)) {
+    const tex = scene.textures.createCanvas(key, SIZE, SIZE);
+    const rgba = pieceRGBA(type, color, { vet: Boolean(vet), flash, shadow });
+    tex.context.putImageData(new ImageData(rgba, SIZE, SIZE), 0, 0);
+    tex.refresh();
+  }
+  return key;
+}
+
+// 도트 말 (32×32, 베테랑은 금 테두리). radius 12 = 원래 크기, 도트가 뭉개지지 않게 정수 배로만 키운다
 export function makePiece(scene, { x, y }, piece, radius = 12) {
-  const white = piece.color === WHITE;
   const ctr = scene.add.container(x, y);
-  ctr.add(scene.add.circle(0, 0, radius, white ? C.whiteFill : C.blackFill).setStrokeStyle(2, white ? C.whiteLine : C.blackLine));
-  ctr.add(scene.add.text(0, 0, PIECE_NAMES[piece.type][0], text(12, white ? '#3a2f25' : '#efe4cc')).setOrigin(0.5));
+  ctr.add(scene.add.image(0, 0, pieceTexture(scene, piece)).setScale(Math.max(1, Math.round(radius / 12))));
   return ctr;
 }
 

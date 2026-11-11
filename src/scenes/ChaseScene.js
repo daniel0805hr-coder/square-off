@@ -4,7 +4,10 @@ import { CHASE as CH } from '../logic/balance.js';
 import { PIECE_NAMES } from '../logic/chess.js';
 import { currentHp } from '../logic/units.js';
 import { InputRouter, keyLabels } from '../input/controls.js';
-import { FONT_SMALL, FONT_BIG, text, PLAYER_COLOR, PLAYER_HEX, SIDE_NAME, makePiece } from '../ui/style.js';
+import { FONT_SMALL, FONT_BIG, text, PLAYER_COLOR, PLAYER_HEX, SIDE_NAME } from '../ui/style.js';
+import { FighterView } from '../ui/fighter.js';
+import { drawBattleHud, drawBrickWall } from '../ui/frame.js';
+import { FxLayer, FX, RAMP } from '../ui/pixelfx.js';
 
 const ARENA_X = 320; // 미로 중심 (화면 좌표)
 const ARENA_Y = 190;
@@ -34,11 +37,24 @@ export class ChaseScene extends Phaser.Scene {
       if (action === 'skill') this.pressed[player].special = true;
     });
 
-    this.add.graphics().fillStyle(0x111018).fillRect(0, 0, 640, 360);
+    const bg = this.add.graphics().fillStyle(0x111018).fillRect(0, 0, 640, 360);
+    // 숲 테두리: 빽빽한 덤불 울타리
+    const mw = CH.cols * CH.tile, mh = CH.rows * CH.tile;
+    drawBrickWall(bg, ARENA_X - mw / 2, ARENA_Y - mh / 2, mw, mh, 8, { stone: 0x24401f, mortar: 0x132612, hi: 0x3a6a30 });
+    drawBattleHud(bg);
     this.mazeGfx = this.add.graphics();
     this.drawMaze();
     this.fx = this.add.graphics().setDepth(2);
-    this.views = this.chase.fighters.map((f) => makePiece(this, this.toScreen(f), f.piece, f.body + 1).setDepth(3));
+    this.views = this.chase.fighters.map((f) => new FighterView(this, this.toScreen(f), f.piece,
+      { body: f.body, color: PLAYER_COLOR[f.player] }).face(f.fx).setDepth(3));
+    // 숲에 떨어지는 나뭇잎: 원래 크기로 화면 대각선 두 조각만 (추격을 가리지 않을 만큼), 미로 안에서만 보이게
+    //   앞면만: 뒷면은 화면을 덮는 저녁 안개와 땅에 쌓인 낙엽이라 미로를 가린다
+    const leaves = new FxLayer(this, { depth: 4 });
+    const [ox, oy] = FX.fallingLeaves.meta.origin;
+    for (const [dx, dy] of [[0, 0], [320, 180]]) leaves.play(FX.fallingLeaves, { x: ox + dx, y: oy + dy, seed: 8 + dx }, { layer: 'front' });
+    const clip = this.make.graphics({ add: false }).fillRect(ARENA_X - mw / 2, ARENA_Y - mh / 2, mw, mh);
+    leaves.view.setMask(clip.createGeometryMask());
+    this.pfx = new FxLayer(this, { depth: 5 });
     this.drawHud();
 
     this.banner = this.add.text(320, 150, '', text(15, '#f2ead8', FONT_BIG)).setOrigin(0.5).setDepth(10).setStroke('#111018', 4);
@@ -51,6 +67,7 @@ export class ChaseScene extends Phaser.Scene {
 
   update(_time, deltaMs) {
     const dt = Math.min(deltaMs / 1000, 1 / 20);
+    this.dt = dt;
     this.phaseTime += dt;
     if (this.phase === 'intro') {
       if (this.phaseTime > INTRO_TIME - 0.4) { this.banner.setText('시작!'); this.subBanner.setText(''); }
@@ -95,10 +112,17 @@ export class ChaseScene extends Phaser.Scene {
         this.phaseTime = 0;
         const winner = this.chase[ev.winner];
         const caught = ev.reason === 'catch';
-        if (caught) this.cameras.main.shake(150, 0.01);
+        if (caught) {
+          this.cameras.main.shake(150, 0.01);
+          const [hunter, prey] = [this.chase.attacker, this.chase.defender];
+          const pos = this.toScreen(prey);
+          const aim = Math.atan2(prey.y - hunter.y, prey.x - hunter.x);
+          this.pfx.play(FX.critHit, { x: pos.x, y: pos.y + prey.body, height: prey.body + 12, aim, palette: RAMP[hunter.player] });
+          this.time.delayedCall(250, () => this.pfx.play(FX.poof, { x: pos.x, y: pos.y + prey.body }));
+        }
         this.banner.setText(caught ? '잡았다! 공격 성공!' : '도망 성공! 방어 성공!').setColor(PLAYER_HEX[winner.player]);
         this.subBanner.setText(caught ? '도망자 제거' : '시간 종료 — 둘 다 제자리로');
-        this.views[1].setAlpha(caught ? 0.25 : 1);
+        if (caught) this.views[1].fall(this.chase.defender.x >= this.chase.attacker.x ? 1 : -1);
         break;
       }
       default:
@@ -106,7 +130,7 @@ export class ChaseScene extends Phaser.Scene {
   }
 
   ghost(f, at) {
-    const g = makePiece(this, this.toScreen(at), f.piece, f.body + 1).setAlpha(0.5).setDepth(1);
+    const g = new FighterView(this, this.toScreen(at), f.piece, { body: f.body, ring: false }).face(f.fx).setAlpha(0.5).setDepth(1);
     this.tweens.add({ targets: g, alpha: 0, duration: 300, onComplete: () => g.destroy() });
   }
 
@@ -135,7 +159,6 @@ export class ChaseScene extends Phaser.Scene {
     const g = this.mazeGfx.clear();
     const w = CH.cols * CH.tile, h = CH.rows * CH.tile;
     const x0 = ARENA_X - w / 2, y0 = ARENA_Y - h / 2;
-    g.fillStyle(TREE_EDGE).fillRect(x0 - 4, y0 - 4, w + 8, h + 8);
     const grid = this.chase.grid;
     for (let r = 0; r < CH.rows; r++) {
       for (let c = 0; c < CH.cols; c++) {
@@ -145,9 +168,13 @@ export class ChaseScene extends Phaser.Scene {
         const { x: cx, y: cy } = cellCenter(c, r);
         const sx = ARENA_X + cx, sy = ARENA_Y + cy;
         if (v === TREE) {
+          // 그림자 → 줄기 → 수관(테두리·몸·빛 받는 쪽)
+          g.fillStyle(0x000000, 0.25).fillEllipse(sx + 2, sy + 7, 16, 6);
           g.fillStyle(0x4a3220).fillRect(sx - 2, sy + 2, 4, 7);
           g.fillStyle(TREE_EDGE).fillCircle(sx, sy - 1, 10);
           g.fillStyle(TREE_TOP).fillCircle(sx, sy - 2, 8);
+          g.fillStyle(0x2f5a28).fillCircle(sx - 3, sy - 5, 4);
+          g.fillStyle(0x4f8a3e).fillRect(sx - 5, sy - 7, 2, 1).fillRect(sx - 1, sy - 8, 1, 1);
         } else if (v === GAP) {
           // 덤불: 폰만 지나감
           g.fillStyle(BUSH).fillCircle(sx - 5, sy, 5).fillCircle(sx + 5, sy, 5).fillCircle(sx, sy - 4, 5);
@@ -209,9 +236,11 @@ export class ChaseScene extends Phaser.Scene {
       if (f.jumpTime > 0) {
         const t = 1 - f.jumpTime / f.mv.special.time;
         lift = Math.sin(t * Math.PI) * 16;
-        g.fillStyle(0x000000, 0.3).fillEllipse(pos.x, pos.y + f.body * 0.6, f.body * 2, f.body);
       }
-      view.setPosition(pos.x, pos.y - lift).setScale(1 + lift / 50);
+      if (this.phase !== 'end' && this.phase !== 'done') {
+        view.face(f.fx).place(pos.x, pos.y, { lift, dt: this.dt });
+        view.setDepth(3 + pos.y / 1000); // 아래쪽 말이 앞에
+      }
       // 은신: 거의 안 보임
       if (this.phase === 'fight') view.setAlpha(f.stealthTime > 0 ? 0.06 : 1);
       if (f.stealthTime > 0) return;

@@ -10,7 +10,12 @@ python3 serve.py
 ```
 
 ## 온라인 (링크 접속)
-메뉴의 **온라인 · 방 만들기** → 화면 아래 링크를 친구에게 보내면, 친구는 링크를 열기만 하면 P2(흑)로 들어온다.
+메뉴의 **온라인 · 인터넷 방** → 화면 아래 링크를 친구에게 보내면, 친구는 링크를 열기만 하면 P2(흑)로 들어온다.
+
+**같은 네트워크(VPN) 방** — 같은 와이파이나 VPN(하마치·라드민·ZeroTier 등)으로 묶인 친구와 할 때. 인터넷 연결 서버를 쓰지 않는다.
+1. 호스트 PC에서 `python3 serve.py`로 켜고 http://localhost:8000 접속 (GitHub Pages 주소에서는 안 됨)
+2. 메뉴의 **온라인 · 같은 네트워크(VPN) 방** → 화면 아래 주소들 중 친구와 같은 네트워크(VPN) 주소를 친구에게 보낸다 (`http://<IP>:8000/?lan=1`)
+3. 친구가 그 주소를 열면 바로 시작. 호스트 PC 방화벽이 8000번 포트를 막으면 열어 줘야 한다
 - 호스트가 게임 전체를 돌리고 화면을 영상으로 보낸다. 친구는 영상을 보며 자기 키보드·마우스 입력만 보낸다 (`src/net/online.js`).
 - 호스트는 게임 탭을 화면에 띄워 둬야 한다 (탭을 내리면 브라우저가 게임을 멈춰 친구 화면도 멈춤).
 - `localhost` 링크는 같은 컴퓨터에서만 열린다. 멀리 있는 친구와 하려면 이 폴더를 인터넷에 올려야 한다 (GitHub Pages·itch.io 등).
@@ -41,7 +46,11 @@ npm test
 | `src/scenes/TurnBattleScene.js` | 턴제 전투 화면 (성채) |
 | `src/scenes/ChaseScene.js` | 추격전 화면 (숲) |
 | `src/scenes/KeyConfigScene.js` | 키 설정 화면 |
-| `src/ui/style.js` | 공통 글꼴·색·임시 말 그림 |
+| `src/ui/style.js` | 공통 글꼴·색·판 위 말 |
+| `src/ui/pieceArt.js` | 체스말 도트 그림 6종 (32×32). 백 = 상아+금+사파이어, 흑 = 흑단+은+루비, 베테랑·맞은 순간 변형 |
+| `src/ui/frame.js` | 화면 공통 틀: 패널·창·판 테두리·돌벽·전투 정보 판 (흑단 + 금 장식) |
+| `src/ui/fighter.js` | 전투 화면의 말 (발밑 팀 색 링, 방향, 걸음, 맞음, 쓰러짐) |
+| `src/ui/pixelfx.js` | 도트 이펙트(타격 불꽃·연기·헤일로·결전 유리 깨짐 등)를 화면에 그리는 연결 |
 | `tests/` | 룰·전투 테스트 |
 
 ## 사용한 외부 리소스
@@ -49,3 +58,4 @@ npm test
 - Phaser 3.90.0 (MIT) — `lib/phaser-3.90.0.min.js`
 - Galmuri 폰트 2.40.3 (SIL OFL 1.1) — `lib/galmuri/` (게임에서 쓰는 Galmuri11·9·14만)
 - PeerJS 1.5.4 (MIT) — `lib/peerjs-1.5.4.min.js`, 온라인 연결
+- pixelfx 0.3.1 (MIT, https://github.com/patch-gg/pixelfx) — `lib/pixelfx/`, 도트 이펙트. 일부 이펙트는 Hugo Duprez의 MIT 코드를 바탕으로 함 (`lib/pixelfx/NOTICE.md`)
