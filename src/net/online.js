@@ -8,6 +8,7 @@ import { remoteInput, actionFor, mouseCode, online } from '../input/controls.js'
 
 const PREFIX = 'squareoff-';
 const GAME_W = 640, GAME_H = 360;
+const VIDEO_SCALE = 2; // 보내는 영상 크기 = 게임 화면 × 이 값
 const CODE_CHARS = 'abcdefghjkmnpqrstuvwxyz23456789'; // 헷갈리는 글자(i, l, o, 0, 1) 제외
 
 const randomCode = () => Array.from({ length: 6 }, () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]).join('');
@@ -60,7 +61,14 @@ export function hostRoom({ game, onStatus, onClick }) {
   const peer = new Peer(PREFIX + code);
   const serverTimer = setTimeout(() => onStatus({ state: 'error', message: ERROR_TEXT.network }), SERVER_TIMEOUT);
   // 게임이 한 장면을 그릴 때마다 그 장면을 영상 한 프레임으로 보낸다 (최대 30fps)
-  const stream = game.canvas.captureStream(0);
+  //   게임 화면(그래픽 가속 WebGL)을 바로 영상으로 뜨면 검은 화면이 될 수 있어서,
+  //   그린 직후에 보통 캔버스로 복사해 그걸 보낸다. 2배로 키워 복사하면 영상 압축에도 도트 글자가 덜 뭉개진다
+  const mirror = document.createElement('canvas');
+  mirror.width = GAME_W * VIDEO_SCALE;
+  mirror.height = GAME_H * VIDEO_SCALE;
+  const ctx = mirror.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  const stream = mirror.captureStream(0);
   const track = stream.getVideoTracks()[0];
   track.contentHint = 'detail';
   let lastFrame = 0;
@@ -68,6 +76,7 @@ export function hostRoom({ game, onStatus, onClick }) {
     const now = performance.now();
     if (now - lastFrame < 1000 / 31) return;
     lastFrame = now;
+    ctx.drawImage(game.canvas, 0, 0, mirror.width, mirror.height);
     track.requestFrame();
   };
   game.events.on('postrender', sendFrame);
@@ -193,6 +202,8 @@ export function joinRoom(code, root) {
   // 정해진 시간 안에 호스트 화면이 안 오면 (네트워크가 직접 연결을 막는 경우 등) 안내
   const joinTimer = setTimeout(() => say(JOIN_FAILED, true), JOIN_TIMEOUT);
   const fail = (text) => { clearTimeout(joinTimer); say(text, true); };
+  // 실제로 화면(영상 프레임)이 들어와야 연결 완료
+  video.addEventListener('loadeddata', () => { clearTimeout(joinTimer); say(''); });
 
   peer.on('error', (err) => fail(errorText(err)));
   peer.on('open', () => {
@@ -204,10 +215,9 @@ export function joinRoom(code, root) {
   peer.on('call', (call) => {
     call.answer();
     call.on('stream', (stream) => {
-      clearTimeout(joinTimer);
       video.srcObject = stream;
       video.play().catch(() => {});
-      say('');
+      say('호스트 화면을 받는 중…');
     });
   });
 
