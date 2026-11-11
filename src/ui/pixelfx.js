@@ -14,8 +14,18 @@ import * as confetti from '../../lib/pixelfx/src/fx/ui/confetti.js';
 import * as shatterWipe from '../../lib/pixelfx/src/fx/transitions/shatter-wipe.js';
 import * as torch from '../../lib/pixelfx/src/fx/fire/torch.js';
 import * as fallingLeaves from '../../lib/pixelfx/src/fx/weather/falling-leaves.js';
+// 필살기
+import * as manaBurst from '../../lib/pixelfx/src/fx/arcane/mana-burst.js';
+import * as thrust from '../../lib/pixelfx/src/fx/melee/thrust.js';
+import * as spinSlash from '../../lib/pixelfx/src/fx/melee/spin-slash.js';
+import * as heavyLanding from '../../lib/pixelfx/src/fx/impacts/heavy-landing.js';
+import * as groundSlam from '../../lib/pixelfx/src/fx/impacts/ground-slam.js';
+import * as smite from '../../lib/pixelfx/src/fx/holy/smite.js';
 
-export const FX = { parry, hitSpark, critHit, poof, collectBurst, halo, holyPillar, confetti, shatterWipe, torch, fallingLeaves };
+export const FX = {
+  parry, hitSpark, critHit, poof, collectBurst, halo, holyPillar, confetti, shatterWipe, torch, fallingLeaves,
+  manaBurst, thrust, spinSlash, heavyLanding, groundSlam, smite,
+};
 
 // 색 띠 (어두운 → 밝은). 플레이어 색에 맞춘 타격 불꽃 등
 export const RAMP = {
@@ -24,9 +34,13 @@ export const RAMP = {
   gold: ['#3b1d2a', '#7a3a2c', '#c4652e', '#f0a040', '#ffd25e', '#fff0a0', '#fffbe0', '#ffffff'],
   heal: ['#0e2a24', '#14472f', '#1d6e3a', '#2f9a45', '#5cc654', '#a0e46c', '#dcffb4', '#ffffff'],
   block: ['#0c1430', '#162c5c', '#1f4f94', '#2f7fcc', '#58b4ec', '#9bdcff', '#d8f4ff', '#ffffff'],
+  violet: ['#12081e', '#2a1040', '#4a1a6a', '#7a2aa0', '#b04ad8', '#e08aff', '#f6d0ff', '#ffffff'],
   // 킹 결전 유리: 붉은 흑요석
   duel: ['#12060a', '#2a0a12', '#4a0f1a', '#7a1622', '#b02a2a', '#e8603a', '#ffc070', '#ffffff'],
 };
+
+// 진영 필살기 색: 백 = 금빛(질서), 흑 = 보랏빛(자유)
+export const sideRamp = (color) => (color === 'w' ? RAMP.gold : RAMP.violet);
 
 // 사람 모양 기본 캐릭터 없이 그리기 (헤일로가 머리카락을 칠하지 않게)
 export const NO_BODY = { mask: { w: 0, h: 0 }, pixels: [], x: 0, y: 0 };

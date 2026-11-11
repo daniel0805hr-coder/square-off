@@ -6,11 +6,14 @@ import { InputRouter, keyLabels } from '../input/controls.js';
 import { FONT_SMALL, FONT_BIG, text, C, PLAYER_COLOR, PLAYER_HEX, SIDE_NAME, endTitle } from '../ui/style.js';
 import { FighterView } from '../ui/fighter.js';
 import { drawBattleHud, drawBrickWall, wallShadow } from '../ui/frame.js';
-import { FxLayer, FX, RAMP, duelEntrance } from '../ui/pixelfx.js';
+import { FxLayer, FX, RAMP, sideRamp, duelEntrance } from '../ui/pixelfx.js';
 
 const ARENA_X = 320; // 아레나 중심 (화면 좌표)
 const ARENA_Y = 190;
 const ROLE_NAME = { attacker: '공격', defender: '수비' };
+// 투기장 모래에서 튀는 흙먼지·돌 조각 색 (필살기 착지·충격파)
+const SAND_DUST = ['#3b2a18', '#6b4e2c', '#8a6a3e', '#a8864e', '#c9a86a', '#e2c992', '#fff4d8'];
+const SAND_STONE = '#7a5a2a';
 const HEAD = 30; // 판정 중심에서 서 있는 말 머리 위까지 (글자 자리)
 const MID = 12;  // 판정 중심에서 말 몸통 가운데까지 (실드 자리)
 const SPECIAL_NAME = { P: '대시', N: '점프', B: '순간이동', R: '돌진', Q: '대시', K: '실드' };
@@ -51,6 +54,7 @@ export class BattleScene extends Phaser.Scene {
       { body: f.body, color: PLAYER_COLOR[f.player] }).face(f.fx).setDepth(3));
     this.top = this.add.graphics().setDepth(4); // 말 위에 그릴 것 (실드 등)
     this.pfx = new FxLayer(this, { depth: 5 }); // 도트 이펙트 (타격 불꽃 등)
+    this.ultUntil = [0, 0]; // 필살기 연출 중인 시각 (말 순서별, ms) — 이 동안의 타격은 큰 불꽃
     // 투기장 양옆 횃불 (위쪽 체력 바와 겹치지 않게 가운데 높이)
     for (const x of [35, 605]) this.pfx.play(FX.torch, { x, y: 214, flip: x > 320, seed: x }); // 벽에 걸린 횃불
     this.stunText = this.battle.fighters.map(() => this.add.text(0, 0, '기절', text(10, '#ffe08a', FONT_SMALL))
@@ -136,12 +140,14 @@ export class BattleScene extends Phaser.Scene {
   playEvent(ev) {
     const f = ev.fighter;
     switch (ev.type) {
-      case 'hit':
-        this.cameras.main.shake(90, 0.008);
+      case 'hit': {
+        const ult = this.inUltimate(ev.from);
+        this.cameras.main.shake(ult ? 160 : 90, ult ? 0.014 : 0.008);
         this.views[this.battle.fighters.indexOf(ev.to)].flash();
-        this.spark(ev.from, ev.to, RAMP[ev.from.player]);
+        this.spark(ev.from, ev.to, ult ? sideRamp(ev.from.piece.color) : RAMP[ev.from.player], ult ? FX.critHit : FX.hitSpark);
         this.floatText(ev.to, `-${ev.damage}`, '#ffe08a');
         break;
+      }
       case 'blocked':
         this.spark(ev.from, ev.to, RAMP.block);
         this.floatText(ev.to, '막힘!', '#9fd8ff');
@@ -149,13 +155,19 @@ export class BattleScene extends Phaser.Scene {
       case 'dash':
       case 'charge':
         this.ghost(f);
+        // 폰 돌격 연타 · 룩 파성추: 돌진마다 창끝 같은 섬광
+        if ((ev.type === 'dash' ? f.dashSpec : f.chargeSpec) === f.ult) this.ultFx(f, FX.thrust, { angle: Math.atan2(f.fy, f.fx), reach: f.type === 'R' ? 90 : 60 });
         break;
       case 'blink':
         this.ghost(f, ev.from, 350);
+        // 비숍 성광: 도착 지점에 빛기둥 (내리꽂히는 순간부터 재생)
+        if (this.inUltimate(f)) this.ultFx(f, FX.smite, {}, 0.48);
         break;
       case 'land':
         this.ring(f, f.jumpSpec.landRadius, PLAYER_COLOR[f.player]);
         this.cameras.main.shake(70, 0.005);
+        // 나이트 대도약: 땅이 꺼지는 착지
+        if (f.jumpSpec === f.ult) { this.ultFx(f, FX.heavyLanding, { palette: SAND_DUST, stone: SAND_STONE }); this.cameras.main.shake(180, 0.014); }
         break;
       case 'wallStun':
         this.cameras.main.shake(120, 0.01);
@@ -164,12 +176,13 @@ export class BattleScene extends Phaser.Scene {
         this.floatText(f, '실드!', '#9fd8ff');
         break;
       case 'ultimate':
-        this.cameras.main.flash(120, 255, 224, 138);
-        this.floatText(f, `${ev.name}!`, '#ffe08a');
+        this.ultimateMoment(f, ev.name);
         break;
       case 'nova':
-        this.ring(f, ev.radius, 0xffe08a);
-        this.cameras.main.shake(100, 0.008);
+        // 퀸 여왕의 일섬 = 원형 베기, 킹 왕의 위압 = 바닥을 타고 퍼지는 충격파
+        if (f.type === 'Q') this.ultFx(f, FX.spinSlash, { radius: ev.radius });
+        else this.ultFx(f, FX.groundSlam, { reach: ev.radius * 2, stone: SAND_STONE });
+        this.cameras.main.shake(160, 0.012);
         break;
       case 'end': {
         this.phase = 'end';
@@ -187,6 +200,46 @@ export class BattleScene extends Phaser.Scene {
       }
       default:
     }
+  }
+
+  inUltimate(f) {
+    return this.ultUntil[this.battle.fighters.indexOf(f)] > this.time.now;
+  }
+
+  // 필살기 이펙트: 말 발밑 기준, 진영 색 (백 금빛 · 흑 보랏빛)
+  ultFx(f, mod, o = {}, start = 0) {
+    const pos = this.toScreen(f);
+    this.pfx.play(mod, { x: pos.x, y: pos.y + 2, palette: sideRamp(f.piece.color), ...o }, { start });
+  }
+
+  // 필살기 발동 (모든 말 공통): 화면이 어두워지고 말만 남음 → 팀 색 띠가 가로질러 이름을 보여 줌 → 말에게서 기운이 터짐
+  ultimateMoment(f, name) {
+    this.ultUntil[this.battle.fighters.indexOf(f)] = this.time.now + 1600;
+    this.ultFx(f, FX.manaBurst);
+    const dim = this.add.rectangle(320, 180, 640, 360, 0x000000).setAlpha(0).setDepth(2.9); // 말(3) 바로 아래
+    this.tweens.chain({
+      targets: dim,
+      tweens: [{ alpha: 0.5, duration: 80 }, { alpha: 0.5, duration: 260 }, { alpha: 0, duration: 320 }],
+      onComplete: () => dim.destroy(),
+    });
+    // 이름 띠: 시전한 쪽에서 들어와 반대쪽으로 빠진다
+    const from = f.player === 1 ? -1 : 1, y = 132;
+    const band = this.add.container(from * 640, 0).setDepth(9);
+    const g = this.add.graphics();
+    g.fillStyle(0x0b0a10, 0.85).fillRect(0, y - 15, 640, 30);
+    g.fillStyle(PLAYER_COLOR[f.player], 0.55).fillRect(0, y - 13, 640, 26);
+    g.fillStyle(C.gold).fillRect(0, y - 13, 640, 1).fillRect(0, y + 12, 640, 1);
+    band.add(g);
+    band.add(this.add.text(320, y, `${PIECE_NAMES[f.type]} · ${name}`, text(15, '#fff6d8', FONT_BIG)).setOrigin(0.5).setStroke('#0b0a10', 4));
+    this.tweens.chain({
+      targets: band,
+      tweens: [
+        { x: 0, duration: 140, ease: 'Cubic.easeOut' },
+        { x: 0, duration: 520 },
+        { x: -from * 640, duration: 160, ease: 'Cubic.easeIn' },
+      ],
+      onComplete: () => band.destroy(),
+    });
   }
 
   // 맞은 말 위에 타격 불꽃 (때린 방향으로 튐)
