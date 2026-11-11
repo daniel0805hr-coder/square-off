@@ -9,7 +9,7 @@ import { currentHp } from '../src/logic/units.js';
 
 const DT = 1 / 60;
 const W = (type) => ({ type, color: 'w' });
-const B = (type) => ({ type, color: 'b' });
+const B = (type, extra = {}) => ({ type, color: 'b', ...extra });
 const open = () => Array.from({ length: CHASE.rows }, () => Array(CHASE.cols).fill(OPEN));
 const steps = (ch, n, inputs = {}) => { for (let i = 0; i < n && !ch.finished; i++) ch.step(DT, typeof inputs === 'function' ? inputs(i) : inputs); };
 
@@ -23,9 +23,18 @@ test('미로: 두 출발점이 이어져 있고, 모든 빈 칸이 연결됨', (
   }
 });
 
-test('술래가 닿으면 공격 성공, 시간까지 버티면 방어 성공', () => {
+// 술래가 도망자 쪽으로 계속 따라간다 (도망자는 가만히)
+const follow = (ch, frames) => {
+  for (let i = 0; i < frames && !ch.finished; i++) {
+    const dx = ch.defender.x - ch.attacker.x;
+    ch.step(DT, { 1: { right: dx > 0, left: dx < 0 } });
+  }
+};
+
+test('술래가 두 번 닿으면 공격 성공, 시간까지 버티면 방어 성공', () => {
   const ch = new Chase(W('Q'), B('Q'), { grid: open() });
-  steps(ch, 600, { 1: { right: true } });
+  follow(ch, 60 * CHASE.duration);
+  assert.equal(ch.tags, CHASE.tagsToCatch);
   assert.equal(ch.winner, 'attacker');
   assert.equal(ch.reason, 'catch');
   const t = new Chase(W('Q'), B('Q'), { grid: open() });
@@ -158,4 +167,34 @@ test('룩 도망자: 벽 블록이 자기 몸이나 점프 중인 술래의 착�
   assert.notEqual(ch.grid[land.r][land.c], BLOCK);
   steps(ch, 40);
   assert.equal(ch.blocked(knight, knight.x, knight.y), false);
+});
+
+test('첫 터치: 도망자 HP 피해 + 잠깐 무적, 술래는 잠깐 멈춤', () => {
+  const ch = new Chase(W('Q'), B('R'), { grid: open() });
+  ch.attacker.x = ch.defender.x - 20;
+  ch.step(DT, {});
+  assert.equal(ch.tags, 1);
+  assert.equal(ch.finished, false);
+  assert.equal(ch.defender.hp, ch.defender.maxHp - ch.attacker.damage);
+  assert.ok(ch.defender.invuln > 0 && ch.attacker.stun > 0);
+  ch.step(DT, {}); // 겹쳐 있어도 무적이라 다시 안 닿음
+  assert.equal(ch.tags, 1);
+});
+
+test('터치 피해로 HP가 0이 되면 바로 잡힘', () => {
+  const ch = new Chase(W('Q'), B('P', { hp: 5 }), { grid: open() });
+  ch.attacker.x = ch.defender.x - 15;
+  ch.step(DT, {});
+  assert.equal(ch.winner, 'attacker');
+  assert.equal(ch.defender.hp, 0);
+});
+
+test('한 번 닿고 버티면 방어 성공, 깎인 HP는 남음', () => {
+  const ch = new Chase(W('Q'), B('R'), { grid: open() });
+  ch.attacker.x = ch.defender.x - 20;
+  ch.step(DT, {});
+  ch.attacker.x = ch.defender.x - 200; // 술래가 놓침
+  steps(ch, 60 * (CHASE.duration + 1));
+  assert.equal(ch.winner, 'defender');
+  assert.equal(ch.defender.hp, ch.defender.maxHp - ch.attacker.damage);
 });

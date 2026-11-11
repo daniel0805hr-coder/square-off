@@ -145,7 +145,8 @@ export const TURN_SKILLS = {
 // 추격전 (기획서 3장·5장) — 공격자 = 술래, 수비자 = 도망자. 잡으면 공격 성공, 버티면 방어 성공 (둘 다 제자리)
 //   추격전은 HP가 변하지 않는다 (승자 보상도 없음, 기획서 7장)
 export const CHASE = {
-  duration: 8,           // 버텨야 하는 시간(초). [패치] 12→8: 술래가 95%+ 잡아서 역할 승률이 기물 차이를 덮었다
+  duration: 10,          // 버텨야 하는 시간(초). [패치] 12→8: 술래가 95%+ 잡아서 역할 승률이 기물 차이를 덮었다
+                         //   [패치 3] 8→10: 두 번 닿아야 잡히게 바꾼 뒤 술래가 너무 불리해져서
   tile: 20,              // 미로 한 칸 크기
   cols: 28, rows: 12,    // 미로 크기 (28×20 = 560, 12×20 = 240 → 투기장과 같은 크기)
   treeDensity: 0.24,     // 나무 비율
@@ -153,28 +154,38 @@ export const CHASE = {
   startGap: 300,         // 시작 거리
   speedMul: 1.0,         // 추격전 이동 속도 = 탑다운 이동 속도 × 이 값
   chaserSpeedMul: 1.0,   // 술래 속도 보정 (1 = 보정 없음)
+  // [패치] 한 번 닿으면 바로 잡히던 걸 2단계로: 첫 터치 = 피해 + 도망자 잠깐 무적·가속, 두 번째 터치 = 잡힘
+  tagsToCatch: 2,        // 이만큼 닿아야 잡힘
+  tagDamageMul: 2,       // 터치 피해 = (탑다운 damageBase + 술래 공격) × 이 값. 이걸로 HP가 0이 되면 바로 잡힘
+  tagInvuln: 0.8,        // 터치당한 도망자: 이 시간(초) 동안 무적
+  tagBoost: 1.3,         //   그동안 이동 속도 배율
+  tagStun: 0.4,          // 터치한 술래: 이 시간(초) 동안 멈춤 (바로 다시 닿지 않게)
   hitHalf: 6,            // 미로 벽 충돌 크기(정사각형 반지름). 한 칸 통로를 편하게 지나가도록 몸보다 작게
 };
 
 // 기물별 추격전 능력 — chaser = 술래일 때, runner = 도망자일 때
 //   passive: 'ramp'(같은 방향으로 계속 가면 가속, 꺾으면 감속) / 'diagonal'(대각선 이동 시 가속) / 'gap'(좁은 틈 통과)
 //   special: 스킬 키로 쓰는 능력. uses = 전투당 횟수 (없으면 쿨타임만)
+// [패치 3] 두 번 닿아야 잡히게 바꾸자 추격이 길어져 기본 속도 차이(속도 2인 룩·킹 vs 4인 나이트)가 승패를 갈랐다
+//   봇 시뮬레이션 평균 승률 (1번 닿으면 잡힘 → 2번): 폰 45→42 나이트 64→50 비숍 55→49 룩 40→51 퀸 57→59 킹 39→49
+//   → 룩·킹은 추격전 전용 속도 보정을 올리고, 나이트는 내렸다
 export const CHASE_MOVES = {
   P: {
     chaser: { passive: { kind: 'ramp', from: 1.0, to: 1.25, time: 0.8 }, desc: '빠르지만 앞으로만 가속' },
-    runner: { passive: { kind: 'gap' }, desc: '작은 몸집으로 좁은 틈(덤불) 통과' },
+    runner: { speedMul: 1.15, passive: { kind: 'gap' }, desc: '작은 몸집으로 좁은 틈(덤불) 통과' },
   },
   N: {
-    chaser: { special: { kind: 'jump', distance: 50, time: 0.35, cooldown: 2.8 }, desc: '벽(나무) 넘기 점프' }, // [패치] 점프 쿨 2.0→2.8 (추격전 최강이던 나이트 완화)
-    runner: { special: { kind: 'jump', distance: 50, time: 0.35, cooldown: 2.8 }, desc: '점프로 막다른 길 탈출' },
+    // [패치] 점프 쿨 2.0→2.8 (추격전 최강이던 나이트 완화), [패치 3] 속도 ×0.88, 술래 점프 쿨 3.5
+    chaser: { speedMul: 0.88, special: { kind: 'jump', distance: 50, time: 0.35, cooldown: 3.5 }, desc: '벽(나무) 넘기 점프' },
+    runner: { speedMul: 0.88, special: { kind: 'jump', distance: 50, time: 0.35, cooldown: 2.8 }, desc: '점프로 막다른 길 탈출' },
   },
   B: {
     chaser: { passive: { kind: 'diagonal', mul: 1.35 }, desc: '대각선 이동 시 가속' },
     runner: { special: { kind: 'blink', distance: 64, uses: 1 }, desc: '대각선 순간이동 1회' },
   },
   R: {
-    chaser: { passive: { kind: 'ramp', from: 0.8, to: 1.5, time: 0.7 }, desc: '직선 질주 최고 속도, 커브 약함' },
-    runner: { speedMul: 0.9, special: { kind: 'block', cooldown: 2.5, uses: 4 }, desc: '느림, 뒤에 벽 블록 설치' },
+    chaser: { passive: { kind: 'ramp', from: 1.1, to: 1.8, time: 0.7 }, desc: '직선 질주 최고 속도, 커브 약함' },
+    runner: { speedMul: 1.3, special: { kind: 'block', cooldown: 2.5, uses: 4 }, desc: '뒤에 벽 블록 설치' }, // 기본 속도가 느려서 보정
   },
   Q: {
     chaser: { special: { kind: 'dash', time: 0.18, speedMul: 3.0, cooldown: 1.3 }, desc: '균형형 (대시)' },
@@ -182,7 +193,8 @@ export const CHASE_MOVES = {
   },
   K: {
     // [패치 2] 추격전 킹 평균 30%→39%: 술래 속도 0.9→1.05, 은신 3초 1회 → 4.5초 2회
-    chaser: { speedMul: 1.05, desc: '약간 빠름' },
-    runner: { special: { kind: 'stealth', time: 4.5, uses: 2 }, desc: '은신 4.5초 (2회)' },
+    // [패치 3] 술래 속도 1.05→1.35, 도망자 속도 보정 1.3 신설 (기본 속도 2라 두 번 닿기 규칙에서 너무 느림)
+    chaser: { speedMul: 1.35, desc: '약간 빠름' },
+    runner: { speedMul: 1.3, special: { kind: 'stealth', time: 4.5, uses: 2 }, desc: '은신 4.5초 (2회)' },
   },
 };

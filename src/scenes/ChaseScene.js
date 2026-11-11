@@ -62,7 +62,7 @@ export class ChaseScene extends Phaser.Scene {
     this.subBanner = this.add.text(320, 172, '', text(10, '#d8d2c4', FONT_SMALL)).setOrigin(0.5).setDepth(10).setStroke('#111018', 3);
     const [a, d] = this.chase.fighters;
     this.banner.setText(`${PIECE_NAMES[a.type]}(술래) VS ${PIECE_NAMES[d.type]}(도망자)`);
-    this.subBanner.setText(`${CH.duration}초 버티면 도망 성공`);
+    this.subBanner.setText(`${CH.duration}초 버티면 도망 성공 · ${CH.tagsToCatch}번 닿으면 잡힘`);
     this.cameras.main.fadeIn(300, 17, 16, 24);
   }
 
@@ -108,6 +108,16 @@ export class ChaseScene extends Phaser.Scene {
       case 'stealth':
         this.ghost(f, f);
         break;
+      case 'tag': { // 술래가 닿음 (아직 안 잡힘이면 도망자는 잠깐 무적·가속)
+        const pos = this.toScreen(ev.to);
+        this.cameras.main.shake(100, 0.007);
+        this.pfx.play(FX.hitSpark, { x: pos.x, y: pos.y + ev.to.body, height: ev.to.body + 12, aim: Math.atan2(ev.to.y - f.y, ev.to.x - f.x), palette: RAMP[f.player] });
+        this.views[1].flash();
+        const t = this.add.text(pos.x, pos.y - 24, `-${ev.damage}  터치 ${ev.tags}/${CH.tagsToCatch}`, text(12, '#ffe08a'))
+          .setOrigin(0.5).setStroke('#111018', 3).setDepth(9);
+        this.tweens.add({ targets: t, y: pos.y - 44, alpha: 0, duration: 800, onComplete: () => t.destroy() });
+        break;
+      }
       case 'end': {
         this.phase = 'end';
         this.phaseTime = 0;
@@ -122,7 +132,8 @@ export class ChaseScene extends Phaser.Scene {
           this.time.delayedCall(250, () => this.pfx.play(FX.poof, { x: pos.x, y: pos.y + prey.body }));
         }
         this.banner.setText(caught ? '잡았다! 공격 성공!' : '도망 성공! 방어 성공!').setColor(PLAYER_HEX[winner.player]);
-        this.subBanner.setText(caught ? '도망자 제거' : '시간 종료 — 둘 다 제자리로');
+        const lost = currentHp(this.pieces.defender) - this.chase.defender.hp;
+        this.subBanner.setText(caught ? '도망자 제거' : `시간 종료 — 둘 다 제자리로${lost > 0 ? ` (도망자 HP -${lost})` : ''}`);
         if (caught) this.views[1].fall(this.chase.defender.x >= this.chase.attacker.x ? 1 : -1);
         break;
       }
@@ -142,8 +153,8 @@ export class ChaseScene extends Phaser.Scene {
       const ch = this.chase;
       this.scene.wake('board', {
         winner: ch.winner, reason: ch.reason,
-        // 추격전은 HP가 변하지 않고 승리 보상도 없다
-        hp: { attacker: currentHp(this.pieces.attacker), defender: currentHp(this.pieces.defender), noReward: true },
+        // 추격전은 승리 보상이 없다. 도망자는 터치당한 만큼 HP가 깎인 채 돌아간다
+        hp: { attacker: currentHp(this.pieces.attacker), defender: ch.defender.hp, noReward: true },
         shieldUsed: {},
       });
       this.scene.stop();
@@ -224,7 +235,9 @@ export class ChaseScene extends Phaser.Scene {
     setLabel(this.timer, String(Math.ceil(ch.timeLeft)), ch.timeLeft <= 3 && this.phase === 'fight' ? '#6fd36f' : '#f2ead8');
     for (const f of ch.fighters) {
       const s = this.specialLabel(f);
-      setLabel(this.hud[f.role].special, s.label, s.ready ? '#ffe08a' : '#8d8798');
+      // 술래 = 터치 횟수, 도망자 = 남은 HP
+      const head = f.role === 'attacker' ? `터치 ${ch.tags}/${CH.tagsToCatch}` : `HP ${f.hp}/${f.maxHp}`;
+      setLabel(this.hud[f.role].special, s.label ? `${head} · ${s.label}` : head, s.ready ? '#ffe08a' : '#8d8798');
     }
 
     const g = this.fx.clear();
@@ -241,7 +254,9 @@ export class ChaseScene extends Phaser.Scene {
         view.setDepth(3 + pos.y / 1000); // 아래쪽 말이 앞에
       }
       // 은신: 거의 안 보임
-      if (this.phase === 'fight') view.setAlpha(f.stealthTime > 0 ? 0.06 : 1);
+      // 터치당한 직후 무적: 깜빡임
+      const blink = f.invuln > 0 && Math.floor(f.invuln * 20) % 2;
+      if (this.phase === 'fight') view.setAlpha(f.stealthTime > 0 ? 0.06 : blink ? 0.35 : 1);
       if (f.stealthTime > 0) return;
       const col = PLAYER_COLOR[f.player];
       const r = f.body + 5;

@@ -1,9 +1,11 @@
 // 추격전 (숲) — 화면·키보드와 무관한 순수 로직.
-// 공격자 = 술래, 수비자 = 도망자. 술래가 닿으면 공격 성공, 시간까지 버티면 방어 성공.
+// 공격자 = 술래, 수비자 = 도망자. 술래가 CHASE.tagsToCatch번 닿으면 공격 성공, 시간까지 버티면 방어 성공.
+// 닿을 때마다 도망자 HP가 깎이고 (0이 되면 바로 잡힘), 도망자는 잠깐 무적·가속, 술래는 잠깐 멈춘다.
 // 매 프레임 step(dt, inputs). inputs = { 1: { up, down, left, right, special }, 2: {...} }
 
 import { STATS, MOVES, TOPDOWN, CHASE as C, CHASE_MOVES } from './balance.js';
 import { WHITE } from './chess.js';
+import { maxHp, currentHp, attackStat } from './units.js';
 import { diagonalsFor } from './battle.js';
 
 export const OPEN = 0, TREE = 1, GAP = 2, BLOCK = 3; // 미로 칸 종류 (GAP = 폰만 지나가는 덤불)
@@ -80,6 +82,9 @@ function makeRunner(piece, role) {
     jumpTime: 0, jumpFrom: null, jumpTo: null,
     dashTime: 0, dashX: 0, dashY: 0,
     stealthTime: 0,
+    hp: currentHp(piece), maxHp: maxHp(piece),
+    damage: (TOPDOWN.damageBase + attackStat(piece)) * C.tagDamageMul, // 술래일 때 터치 피해
+    invuln: 0, stun: 0, // 터치당한 도망자 무적 / 터치한 술래 멈춤
   };
 }
 
@@ -91,6 +96,7 @@ export class Chase {
     this.events = [];
     this.winner = null; // 'attacker' | 'defender'
     this.reason = null; // 'catch' | 'time'
+    this.tags = 0;      // 지금까지 닿은 횟수
   }
 
   get attacker() { return this.fighters[0]; }
@@ -121,11 +127,24 @@ export class Chase {
     for (const f of this.fighters) this.control(f, inputs[f.player] || {}, dt);
 
     const [a, d] = this.fighters;
-    if (a.jumpTime <= 0 && d.jumpTime <= 0 && Math.hypot(a.x - d.x, a.y - d.y) < a.body + d.body + 1) {
-      this.finish('attacker', 'catch');
-    } else if (this.timeLeft <= 0) {
+    if (a.jumpTime <= 0 && d.jumpTime <= 0 && d.invuln <= 0 && a.stun <= 0
+      && Math.hypot(a.x - d.x, a.y - d.y) < a.body + d.body + 1) {
+      this.tag(a, d);
+    }
+    if (this.finished) return;
+    if (this.timeLeft <= 0) {
       this.finish('defender', 'time');
     }
+  }
+
+  // 술래가 닿음: 피해, 횟수를 다 채우거나 HP가 0이면 잡힘
+  tag(a, d) {
+    this.tags++;
+    d.hp = Math.max(0, Math.round(d.hp - a.damage));
+    this.events.push({ type: 'tag', fighter: a, to: d, damage: a.damage, tags: this.tags });
+    if (this.tags >= C.tagsToCatch || d.hp <= 0) { this.finish('attacker', 'catch'); return; }
+    d.invuln = C.tagInvuln;
+    a.stun = C.tagStun;
   }
 
   control(f, inp, dt) {
@@ -137,6 +156,8 @@ export class Chase {
 
     f.specialCd = Math.max(0, f.specialCd - dt);
     f.stealthTime = Math.max(0, f.stealthTime - dt);
+    f.invuln = Math.max(0, f.invuln - dt);
+    if (f.stun > 0) { f.stun = Math.max(0, f.stun - dt); return; }
 
     if (f.jumpTime > 0) { this.updateJump(f, dt); return; }
     if (moving) { f.fx = dx; f.fy = dy; }
@@ -155,6 +176,7 @@ export class Chase {
     }
     f.lastDx = moving ? dx : 0; f.lastDy = moving ? dy : 0;
 
+    if (f.invuln > 0) mul *= C.tagBoost; // 터치당한 직후 가속
     let vx = dx * f.speed * mul, vy = dy * f.speed * mul;
     if (f.dashTime > 0) {
       f.dashTime = Math.max(0, f.dashTime - dt);
