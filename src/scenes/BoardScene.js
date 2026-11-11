@@ -70,7 +70,9 @@ export class BoardScene extends Phaser.Scene {
     this.chess = new ChessGame();
     this.newGame();
 
-    this.boardGfx = this.add.graphics();
+    // 칸 그림은 바뀔 때만 다시 그려 한 장으로 굽는다 (그래픽 객체는 매 프레임 칸 질감 명령을 전부 다시 실행해 무겁다)
+    this.boardGfx = this.make.graphics({ add: false });
+    this.boardRt = this.add.renderTexture(0, 0, 640, 360).setOrigin(0);
     this.pieceLayer = this.add.container(0, 0);
     this.overlay = this.add.container(0, 0).setDepth(10);
     this.fx = new FxLayer(this, { depth: 5 }); // 말 위, 메뉴·안내 창 아래
@@ -670,7 +672,7 @@ export class BoardScene extends Phaser.Scene {
 
   // 바뀌지 않는 것: 패널 테두리, 좌표 글자, 제목
   drawStatic() {
-    const g = this.add.graphics().setDepth(-1); // 패널·판 틀은 칸·말 아래
+    const g = this.make.graphics({ add: false }); // 패널·판 틀은 칸·말 아래 (끝에 한 장으로 구움)
     for (const x of [12, 468]) {
       drawPanel(g, x, BOARD_Y, 160, 256);
       // 머리 띠 + 구역 구분선
@@ -709,6 +711,9 @@ export class BoardScene extends Phaser.Scene {
     this.statusText = this.add.text(320, 336, '', text(12, UI_HEX.text)).setOrigin(0.5, 0).setStroke('#0b0a10', 3);
     this.quitHint = this.add.text(628, 322, 'Esc = 그만두고 메뉴로', text(10, UI_HEX.muted, FONT_SMALL)).setOrigin(1, 0);
     this.panelFrame = this.add.graphics();
+    // 판 틀·패널 바탕은 끝까지 그대로라 한 장으로 굽는다
+    this.add.renderTexture(0, 0, 640, 360).setOrigin(0).setDepth(-1).draw(g);
+    g.destroy();
   }
 
   // 판 테두리: 흑단 틀 + 안쪽 금 띠 + 모서리 금 장식, 좌표는 틀 위에
@@ -766,6 +771,7 @@ export class BoardScene extends Phaser.Scene {
       const cur = this.cursor[p];
       gfx.lineStyle(2, PLAYER_COLOR[p]).strokeRect(BOARD_X + cur.c * TILE + 1, BOARD_Y + cur.r * TILE + 1, TILE - 2, TILE - 2);
     }
+    this.boardRt.clear().draw(gfx);
 
     // 말
     this.pieceLayer.removeAll(true);

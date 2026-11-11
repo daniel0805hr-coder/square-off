@@ -6,7 +6,7 @@ import { InputRouter, keyLabels } from '../input/controls.js';
 import { FONT_SMALL, FONT_BIG, text, setLabel, C, PLAYER_COLOR, PLAYER_HEX, SIDE_NAME, endTitle } from '../ui/style.js';
 import { FighterView } from '../ui/fighter.js';
 import { drawBattleHud, drawBrickWall, wallShadow, bakedLayer } from '../ui/frame.js';
-import { FxLayer, FX, RAMP, sideRamp, duelEntrance, wallTorches } from '../ui/pixelfx.js';
+import { FxLayer, FX, RAMP, sideRamp, duelEntrance, wallTorches, prepareFx } from '../ui/pixelfx.js';
 
 const ARENA_X = 320; // 아레나 중심 (화면 좌표)
 const ARENA_Y = 190;
@@ -14,6 +14,16 @@ const ROLE_NAME = { attacker: '공격', defender: '수비' };
 // 투기장 모래에서 튀는 흙먼지·돌 조각 색 (필살기 착지·충격파)
 const SAND_DUST = ['#3b2a18', '#6b4e2c', '#8a6a3e', '#a8864e', '#c9a86a', '#e2c992', '#fff4d8'];
 const SAND_STONE = '#7a5a2a';
+const LANDING = { palette: SAND_DUST, stone: SAND_STONE }; // 나이트 대도약 착지
+
+// 필살기 이펙트 옵션 (발동할 때와 미리 그려 둘 때 똑같아야 미리 그린 그림을 꺼내 쓴다)
+const ultOpts = (f, o = {}) => ({ palette: sideRamp(f.piece.color), ...o });
+// 돌진 섬광: 방향 각도는 소수 넷째 자리까지 (같은 방향이면 같은 그림)
+const thrustOpts = (f, dx, dy) => ({ angle: Math.round(Math.atan2(dy, dx) * 1e4) / 1e4, reach: f.type === 'R' ? 90 : 60 });
+// 퀸 여왕의 일섬 = 원형 베기, 킹 왕의 위압 = 바닥을 타고 퍼지는 충격파
+const novaFx = (f) => (f.type === 'Q'
+  ? [FX.spinSlash, { radius: f.ult.radius }]
+  : [FX.groundSlam, { reach: f.ult.radius * 2, stone: SAND_STONE }]);
 // 위쪽 정보 판 안 배치: 막대 폭과 그 옆 글자 자리 (판 폭 238 안에 들어가게)
 const BAR_W = 144;
 // 아래 키 안내: 한쪽이 화면 절반을 넘지 않게 접는다 (두 줄까지)
@@ -58,6 +68,7 @@ export class BattleScene extends Phaser.Scene {
       { body: f.body, color: PLAYER_COLOR[f.player] }).face(f.fx).setDepth(3));
     this.top = this.add.graphics().setDepth(4); // 말 위에 그릴 것 (실드 등)
     this.pfx = new FxLayer(this, { depth: 5 }); // 도트 이펙트 (타격 불꽃 등)
+    for (const f of this.battle.fighters) this.prepareUlt(f);
     this.ultUntil = [0, 0]; // 필살기 연출 중인 시각 (말 순서별, ms) — 이 동안의 타격은 큰 불꽃
     // 투기장 양옆 횃불 (위쪽 체력 바와 겹치지 않게 가운데 높이)
     wallTorches(this, [35, 605], 214); // 벽에 걸린 횃불
@@ -160,7 +171,7 @@ export class BattleScene extends Phaser.Scene {
       case 'charge':
         this.ghost(f);
         // 폰 돌격 연타 · 룩 파성추: 돌진마다 창끝 같은 섬광
-        if ((ev.type === 'dash' ? f.dashSpec : f.chargeSpec) === f.ult) this.ultFx(f, FX.thrust, { angle: Math.atan2(f.fy, f.fx), reach: f.type === 'R' ? 90 : 60 });
+        if ((ev.type === 'dash' ? f.dashSpec : f.chargeSpec) === f.ult) this.ultFx(f, FX.thrust, thrustOpts(f, f.fx, f.fy));
         break;
       case 'blink':
         this.ghost(f, ev.from, 350);
@@ -171,7 +182,7 @@ export class BattleScene extends Phaser.Scene {
         this.ring(f, f.jumpSpec.landRadius, PLAYER_COLOR[f.player]);
         this.cameras.main.shake(70, 0.005);
         // 나이트 대도약: 땅이 꺼지는 착지
-        if (f.jumpSpec === f.ult) { this.ultFx(f, FX.heavyLanding, { palette: SAND_DUST, stone: SAND_STONE }); this.cameras.main.shake(180, 0.014); }
+        if (f.jumpSpec === f.ult) { this.ultFx(f, FX.heavyLanding, LANDING); this.cameras.main.shake(180, 0.014); }
         break;
       case 'wallStun':
         this.cameras.main.shake(120, 0.01);
@@ -184,8 +195,7 @@ export class BattleScene extends Phaser.Scene {
         break;
       case 'nova':
         // 퀸 여왕의 일섬 = 원형 베기, 킹 왕의 위압 = 바닥을 타고 퍼지는 충격파
-        if (f.type === 'Q') this.ultFx(f, FX.spinSlash, { radius: ev.radius });
-        else this.ultFx(f, FX.groundSlam, { reach: ev.radius * 2, stone: SAND_STONE });
+        this.ultFx(f, ...novaFx(f));
         this.cameras.main.shake(160, 0.012);
         break;
       case 'end': {
@@ -213,7 +223,23 @@ export class BattleScene extends Phaser.Scene {
   // 필살기 이펙트: 말 발밑 기준, 진영 색 (백 금빛 · 흑 보랏빛)
   ultFx(f, mod, o = {}, start = 0) {
     const pos = this.toScreen(f);
-    this.pfx.play(mod, { x: pos.x, y: pos.y + 2, palette: sideRamp(f.piece.color), ...o }, { start });
+    this.pfx.play(mod, { x: pos.x, y: pos.y + 2, ...ultOpts(f, o) }, { start });
+  }
+
+  // 이 말이 쓸 수 있는 필살기 이펙트를 백그라운드에서 미리 그려 둔다 (발동 순간 버벅이지 않게)
+  prepareUlt(f) {
+    const prep = (mod, o) => prepareFx(mod, ultOpts(f, o));
+    prep(FX.manaBurst);
+    const kind = f.ult.kind;
+    if (kind === 'rush' || kind === 'charge') {
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+        const k = Math.hypot(dx, dy);
+        prep(FX.thrust, thrustOpts(f, dx / k, dy / k));
+      }
+    }
+    if (kind === 'volley') prep(FX.smite);
+    if (kind === 'jump') prep(FX.heavyLanding, LANDING);
+    if (kind === 'nova') prep(...novaFx(f));
   }
 
   // 필살기 발동 (모든 말 공통): 화면이 어두워지고 말만 남음 → 팀 색 띠가 가로질러 이름을 보여 줌 → 말에게서 기운이 터짐

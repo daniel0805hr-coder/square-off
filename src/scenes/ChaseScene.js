@@ -7,7 +7,7 @@ import { InputRouter, keyLabels } from '../input/controls.js';
 import { FONT_SMALL, FONT_BIG, text, setLabel, PLAYER_COLOR, PLAYER_HEX, SIDE_NAME } from '../ui/style.js';
 import { FighterView } from '../ui/fighter.js';
 import { drawBattleHud, drawBrickWall, bakedLayer } from '../ui/frame.js';
-import { FxLayer, FX, RAMP } from '../ui/pixelfx.js';
+import { FxLayer, FX, RAMP, cachedLoop, prepareLoop } from '../ui/pixelfx.js';
 
 const ARENA_X = 320; // 미로 중심 (화면 좌표)
 const ARENA_Y = 190;
@@ -17,6 +17,19 @@ const SPECIAL_NAME = { jump: '점프', blink: '순간이동', block: '벽 블록
 const HELP_W = 290;
 const INTRO_TIME = 1.4;
 const END_TIME = 1.8;
+const MAZE_W = CH.cols * CH.tile, MAZE_H = CH.rows * CH.tile;
+// 숲에 떨어지는 나뭇잎: 원래 크기로 화면 대각선 두 조각만 (추격을 가리지 않을 만큼), 미로 안에서만 보이게 (영역을 미로 크기로)
+//   앞면만: 뒷면은 화면을 덮는 저녁 안개와 땅에 쌓인 낙엽이라 미로를 가린다
+const LEAVES = (() => {
+  const [ox, oy] = FX.fallingLeaves.meta.origin;
+  return {
+    x: ARENA_X - MAZE_W / 2, y: ARENA_Y - MAZE_H / 2, w: MAZE_W, h: MAZE_H,
+    plays: [[0, 0], [320, 180]].map(([dx, dy]) => ({ x: ox + dx, y: oy + dy, seed: 8 + dx })),
+    layer: 'front', fps: FX.fallingLeaves.meta.fps,
+  };
+})();
+// 게임을 켤 때 나뭇잎 그림을 백그라운드에서 미리 그려 두기 시작 (main.js)
+export const prepareChase = () => prepareLoop('fallingLeaves', LEAVES);
 const GRASS = 0x3d5a34, GRASS_DARK = 0x34502c, TREE_TOP = 0x1f3a1c, TREE_EDGE = 0x152814, BUSH = 0x6f9a4a, STONE = 0x8c8f99;
 
 // 추격전 화면 (숲). 로직은 logic/chase.js, 여기는 입력 전달과 그리기만.
@@ -39,7 +52,7 @@ export class ChaseScene extends Phaser.Scene {
       if (action === 'skill') this.pressed[player].special = true;
     });
 
-    const mw = CH.cols * CH.tile, mh = CH.rows * CH.tile;
+    const mw = MAZE_W, mh = MAZE_H;
     this.ground = bakedLayer(this, (g) => {
       g.fillStyle(0x111018).fillRect(0, 0, 640, 360);
       // 숲 테두리: 빽빽한 덤불 울타리
@@ -50,11 +63,7 @@ export class ChaseScene extends Phaser.Scene {
     this.fx = this.add.graphics().setDepth(2);
     this.views = this.chase.fighters.map((f) => new FighterView(this, this.toScreen(f), f.piece,
       { body: f.body, color: PLAYER_COLOR[f.player] }).face(f.fx).setDepth(3));
-    // 숲에 떨어지는 나뭇잎: 원래 크기로 화면 대각선 두 조각만 (추격을 가리지 않을 만큼), 미로 안에서만 보이게 (레이어를 미로 크기로)
-    //   앞면만: 뒷면은 화면을 덮는 저녁 안개와 땅에 쌓인 낙엽이라 미로를 가린다
-    const leaves = new FxLayer(this, { depth: 4, rect: { x: ARENA_X - mw / 2, y: ARENA_Y - mh / 2, w: mw, h: mh }, fps: FX.fallingLeaves.meta.fps });
-    const [ox, oy] = FX.fallingLeaves.meta.origin;
-    for (const [dx, dy] of [[0, 0], [320, 180]]) leaves.play(FX.fallingLeaves, { x: ox + dx, y: oy + dy, seed: 8 + dx }, { layer: 'front' });
+    cachedLoop(this, 'fallingLeaves', LEAVES, 4); // 떨어지는 나뭇잎
     this.pfx = new FxLayer(this, { depth: 5 });
     this.drawHud();
 

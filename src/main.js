@@ -2,8 +2,9 @@ import { BoardScene } from './scenes/BoardScene.js';
 import { BattleScene } from './scenes/BattleScene.js';
 import { KeyConfigScene } from './scenes/KeyConfigScene.js';
 import { TurnBattleScene } from './scenes/TurnBattleScene.js';
-import { ChaseScene } from './scenes/ChaseScene.js';
+import { ChaseScene, prepareChase } from './scenes/ChaseScene.js';
 import { startGamepads } from './input/gamepad.js';
+import { FX, prepareFx } from './ui/pixelfx.js';
 
 // 폰트가 로드된 뒤에 게임을 시작해야 글자가 기본 폰트로 그려지지 않는다
 await Promise.all([
@@ -27,6 +28,8 @@ if (params.has('room')) {
 }
 
 function startGame() {
+  prepareChase(); // 추격전 숲의 나뭇잎 그림을 백그라운드에서 미리 그려 둔다
+  prepareFx(FX.poof); // 말이 쓰러질 때마다 나는 연기
   // 디버그용: 브라우저 콘솔에서 window.squareOff로 접근
   window.squareOff = new Phaser.Game({
     type: Phaser.AUTO,
