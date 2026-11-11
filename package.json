@@ -1,0 +1,11 @@
+{
+  "name": "square-off",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Square Off: 말들의 반란 — 체스 + 전투 2인 도트 게임",
+  "scripts": {
+    "start": "python3 serve.py 8000",
+    "test": "node --test"
+  }
+}

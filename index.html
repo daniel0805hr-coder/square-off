@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Square Off: 말들의 반란</title>
+  <!-- 한글 도트 폰트 Galmuri (SIL OFL 1.1, https://github.com/quiple/galmuri) -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/galmuri@2.40.3/dist/galmuri.css">
+  <style>
+    html, body { margin: 0; height: 100%; background: #111018; overflow: hidden; }
+    #game { width: 100%; height: 100%; }
+    canvas { image-rendering: pixelated; }
+  </style>
+</head>
+<body>
+  <div id="game"></div>
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.90.0/dist/phaser.min.js"></script>
+  <!-- 온라인 연결 PeerJS (MIT, https://github.com/peers/peerjs) -->
+  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

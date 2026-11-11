@@ -1,0 +1,7 @@
+# 이 컴퓨터 전용 (작업 도구 설정)
+.claude/
+.impeccable/
+node_modules/
+
+# 기획서는 공개 저장소에 올리지 않는다
+기획서.md
