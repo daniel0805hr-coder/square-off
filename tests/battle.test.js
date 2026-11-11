@@ -86,3 +86,67 @@ test('킹 결전(데스매치): 시간이 지나도 끝나지 않음', () => {
   for (let t = 0; t < 30; t += 1 / 60) b.step(1 / 60, {});
   assert.equal(b.finished, false);
 });
+
+// ───────── 필살기 (스킬 키 길게) ─────────
+
+// 두 말을 가까이 붙여 놓고 시작 (a = 공격자, d = 수비자, gap = 몸 중심 거리)
+const close = (a, d, gap) => {
+  const b = new Battle({ type: a, color: 'w' }, { type: d, color: 'b' });
+  b.attacker.x = -gap / 2; b.defender.x = gap / 2;
+  return b;
+};
+
+test('필살기: 전투당 1회만', () => {
+  const b = close('Q', 'R', 40);
+  b.step(DT, { 1: { ultimate: true } });
+  assert.equal(b.attacker.ultUsed, true);
+  const hp = b.defender.hp;
+  for (let t = 0; t < 1; t += DT) b.step(DT, {});
+  b.step(DT, { 1: { ultimate: true } });
+  assert.equal(b.events.some((e) => e.type === 'ultimate'), false);
+  assert.ok(b.defender.hp < hp + 1);
+});
+
+test('필살기: 퀸 일섬은 주변에 피해, 멀면 빗나감', () => {
+  const near = close('Q', 'R', 40);
+  near.step(DT, { 1: { ultimate: true } });
+  assert.ok(near.defender.hp < near.defender.maxHp);
+  const far = close('Q', 'R', 150);
+  far.step(DT, { 1: { ultimate: true } });
+  assert.equal(far.defender.hp, far.defender.maxHp);
+});
+
+test('필살기: 폰 돌격 연타는 대시 3번', () => {
+  const b = close('P', 'R', 120);
+  b.step(DT, { 1: { right: true, ultimate: true } });
+  let dashes = 1;
+  for (let t = 0; t < 1; t += DT) { b.step(DT, { 1: { right: true } }); dashes += b.events.filter((e) => e.type === 'dash').length; }
+  assert.equal(dashes, 3);
+  assert.ok(b.defender.hp < b.defender.maxHp); // 부딪혀서 피해
+});
+
+test('필살기: 룩 파성추는 벽에 부딪혀도 기절하지 않음', () => {
+  const b = close('R', 'P', 40);
+  b.attacker.x = 200; b.defender.x = 260; // 오른쪽 벽 가까이
+  b.step(DT, { 1: { ultimate: true } });
+  for (let t = 0; t < 1.5; t += DT) b.step(DT, {});
+  assert.equal(b.attacker.stun, 0);
+});
+
+test('필살기: 비숍 성광은 순간이동 + 8방향 투사체', () => {
+  const b = close('B', 'N', 150);
+  b.step(DT, { 1: { ultimate: true } });
+  assert.ok(b.events.some((e) => e.type === 'blink'));
+  assert.equal(b.projectiles.length, 8);
+});
+
+test('필살기: 나이트 대도약은 평소 점프보다 멀리', () => {
+  const jump = (inp) => {
+    const b = close('N', 'R', 250);
+    const x = b.attacker.x;
+    b.step(DT, { 1: inp });
+    for (let t = 0; t < 0.6; t += DT) b.step(DT, {});
+    return b.attacker.x - x;
+  };
+  assert.ok(jump({ ultimate: true }) > jump({ special: true }) + 20);
+});

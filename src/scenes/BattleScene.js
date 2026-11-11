@@ -1,6 +1,6 @@
 import { Battle } from '../logic/battle.js';
 import { BattleBot } from '../logic/ai.js';
-import { TOPDOWN as T } from '../logic/balance.js';
+import { TOPDOWN as T, ULTIMATE } from '../logic/balance.js';
 import { PIECE_NAMES } from '../logic/chess.js';
 import { InputRouter, keyLabels } from '../input/controls.js';
 import { FONT_SMALL, FONT_BIG, text, C, PLAYER_COLOR, PLAYER_HEX, SIDE_NAME, endTitle } from '../ui/style.js';
@@ -34,11 +34,15 @@ export class BattleScene extends Phaser.Scene {
     this.phase = 'intro'; // intro | fight | end
     this.phaseTime = 0;
     this.pressed = { 1: {}, 2: {} };
+    this.holding = { 1: null, 2: null }; // 스킬 키를 누르고 있는 시간 (길게 누르면 필살기)
 
     this.router = new InputRouter(this, ({ player, action, repeat }) => {
       if (repeat || this.phase !== 'fight' || this.bot?.player === player) return;
       if (action === 'confirm') this.pressed[player].attack = true;
-      if (action === 'skill') this.pressed[player].special = true;
+      if (action !== 'skill') return;
+      // 필살기가 남아 있으면 뗄 때까지 기다린다 (짧게 = 스킬, 길게 = 필살기). 다 썼으면 바로 스킬
+      if (this.fighterOf(player).ultUsed) this.pressed[player].special = true;
+      else this.holding[player] = 0;
     });
 
     this.drawArena();
@@ -86,7 +90,7 @@ export class BattleScene extends Phaser.Scene {
         for (const f of b.fighters) if (f.shieldUsed) shieldUsed[f.piece.color] = true;
         this.scene.wake('board', {
           winner: b.winner, reason: b.reason,
-          hp: { attacker: b.attacker.hp, defender: b.defender.hp },
+          hp: { attacker: Math.ceil(b.attacker.hp), defender: Math.ceil(b.defender.hp) },
           shieldUsed,
         });
         this.scene.stop();
@@ -95,10 +99,18 @@ export class BattleScene extends Phaser.Scene {
     this.draw();
   }
 
+  fighterOf(player) {
+    return this.battle.fighters.find((f) => f.player === player);
+  }
+
   readInputs(dt) {
     const inputs = {};
     for (const p of [1, 2]) {
       if (this.bot?.player === p) { inputs[p] = this.bot.think(dt); continue; }
+      if (this.holding[p] !== null) {
+        if (!this.router.isDown(p, 'skill')) { this.pressed[p].special = true; this.holding[p] = null; }
+        else if ((this.holding[p] += dt) >= ULTIMATE.hold) { this.pressed[p].ultimate = true; this.holding[p] = null; }
+      }
       inputs[p] = { ...this.pressed[p], ...this.router.directions(p) };
     }
     return inputs;
@@ -142,7 +154,7 @@ export class BattleScene extends Phaser.Scene {
         this.ghost(f, ev.from, 350);
         break;
       case 'land':
-        this.ring(f, f.mv.special.landRadius, PLAYER_COLOR[f.player]);
+        this.ring(f, f.jumpSpec.landRadius, PLAYER_COLOR[f.player]);
         this.cameras.main.shake(70, 0.005);
         break;
       case 'wallStun':
@@ -150,6 +162,14 @@ export class BattleScene extends Phaser.Scene {
         break;
       case 'shield':
         this.floatText(f, '실드!', '#9fd8ff');
+        break;
+      case 'ultimate':
+        this.cameras.main.flash(120, 255, 224, 138);
+        this.floatText(f, `${ev.name}!`, '#ffe08a');
+        break;
+      case 'nova':
+        this.ring(f, ev.radius, 0xffe08a);
+        this.cameras.main.shake(100, 0.008);
         break;
       case 'end': {
         this.phase = 'end';
@@ -221,12 +241,13 @@ export class BattleScene extends Phaser.Scene {
         text(12, PLAYER_HEX[f.player])).setOrigin(left ? 0 : 1, 0);
       const keys = keyLabels(f.player);
       const help = this.bot?.player === f.player ? '컴퓨터가 조종'
-        : `이동 ${keys.move}  공격 ${keys.confirm}  스킬(${SPECIAL_NAME[f.type]}) ${keys.skill}`;
+        : `이동 ${keys.move}  공격 ${keys.confirm}  스킬(${SPECIAL_NAME[f.type]}) ${keys.skill} · 길게 = 필살기`;
       this.add.text(x, 326, help, text(10, '#8d8798', FONT_SMALL)).setOrigin(left ? 0 : 1, 0);
       this.hud[f.role] = {
         bar: this.add.graphics(),
         hp: this.add.text(left ? x + 164 : x - 164, 32, '', text(10, '#d8d2c4', FONT_SMALL)).setOrigin(left ? 0 : 1, 0),
         special: this.add.text(left ? x + 164 : x - 164, 44, '', text(10, '#8d8798', FONT_SMALL)).setOrigin(left ? 0 : 1, 0),
+        ult: this.add.text(left ? x + 222 : x - 222, 16, '', text(10, '#8d8798', FONT_SMALL)).setOrigin(left ? 1 : 0, 0),
         x: left ? x : x - 160,
       };
     }
@@ -252,12 +273,13 @@ export class BattleScene extends Phaser.Scene {
       h.bar.clear();
       h.bar.fillStyle(0x3a3746).fillRect(h.x, 33, 160, 8);
       h.bar.fillStyle(PLAYER_COLOR[f.player]).fillRect(h.x, 33, Math.round(160 * f.hp / f.maxHp), 8);
-      h.hp.setText(`${f.hp}/${f.maxHp}`);
+      h.hp.setText(`${Math.ceil(f.hp)}/${f.maxHp}`);
       // 특수기 쿨타임 바: 차오르는 중이면 회색, 다 차면 노란색
       const s = this.specialState(f);
       h.bar.fillStyle(0x3a3746).fillRect(h.x, 46, 160, 4);
       h.bar.fillStyle(s.ready ? READY : CHARGING).fillRect(h.x, 46, Math.round(160 * s.progress), 4);
       h.special.setText(s.label).setColor(s.ready ? '#ffe08a' : '#8d8798');
+      h.ult.setText(f.ultUsed ? '필살기 사용함' : '필살기 준비').setColor(f.ultUsed ? '#5a5566' : '#ffe08a');
     }
     this.timer.setText(b.deathmatch ? '결전' : String(Math.ceil(b.timeLeft)));
     this.timer.setColor(b.timeLeft <= 3 && this.phase === 'fight' ? '#ff6a5a' : '#f2ead8');
@@ -280,7 +302,7 @@ export class BattleScene extends Phaser.Scene {
       // 점프: 발밑 링은 바닥에 남아 그림자가 되고, 말만 떠오름
       let lift = 0;
       if (f.jumpTime > 0) {
-        const t = 1 - f.jumpTime / f.mv.special.time;
+        const t = 1 - f.jumpTime / f.jumpSpec.time;
         lift = Math.sin(t * Math.PI) * 18;
       }
       if (this.phase !== 'end' && this.phase !== 'done') {
@@ -304,6 +326,13 @@ export class BattleScene extends Phaser.Scene {
       if (!s.ready && f.mv.special.kind !== 'shield') {
         g.fillStyle(0x111018, 0.7).fillRect(pos.x - 11, pos.y + f.body + 5, 22, 3);
         g.fillStyle(CHARGING).fillRect(pos.x - 11, pos.y + f.body + 5, Math.round(22 * s.progress), 3);
+      }
+      // 스킬 키를 누르고 있으면 필살기 충전 원 (다 차면 발동)
+      const held = this.holding[f.player];
+      if (held !== null && this.phase === 'fight' && held > 0.12) {
+        const t = Math.min(1, held / ULTIMATE.hold);
+        top.lineStyle(2, 0xffe08a, 0.4 + t * 0.6).beginPath()
+          .arc(pos.x, pos.y - MID, f.body + 10, -Math.PI / 2, -Math.PI / 2 + t * Math.PI * 2).strokePath();
       }
       // 근접 공격 판정
       if (f.attackTime > 0) {

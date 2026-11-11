@@ -126,7 +126,7 @@ test('공격 승리: 남은 HP + 보상 10, 최대 HP 초과 안 함', () => {
   assert.equal(currentHp(g.pieceAt(sq('d5'))), 40);
   const h = new ChessGame().loadFen('4k3/8/8/3n4/8/8/8/3QK3 w - -');
   h.move(sq('d1'), sq('d5'), 'Q', 'attacker', { attacker: 48, defender: 0 });
-  assert.equal(currentHp(h.pieceAt(sq('d5'))), 50);
+  assert.equal(currentHp(h.pieceAt(sq('d5'))), 40);
 });
 
 test('방어 성공·시간 종료: 깎인 HP 유지', () => {
@@ -143,7 +143,7 @@ test('자이언트 킬 → 베테랑 승격 대기, 선택하면 적용 (1회)',
   g.promoteVeteran(sq('d5'), 'hp');
   const p = g.pieceAt(sq('d5'));
   assert.equal(p.vet, 'hp');
-  assert.equal(maxHp(p), 30);
+  assert.equal(maxHp(p), 40);
   assert.equal(currentHp(p), 24); // 4 + 보상 10 + 승격 10
 });
 
@@ -166,5 +166,5 @@ test('승급하면 풀 HP', () => {
   const g = new ChessGame().loadFen('7k/P7/8/8/8/8/8/K7 w - -');
   g.pieceAt(sq('a7')).hp = 5;
   g.move(sq('a7'), sq('a8'), 'Q');
-  assert.equal(currentHp(g.pieceAt(sq('a8'))), 50);
+  assert.equal(currentHp(g.pieceAt(sq('a8'))), 40);
 });

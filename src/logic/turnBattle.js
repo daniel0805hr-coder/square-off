@@ -100,7 +100,7 @@ export class TurnBattle {
         if (foeBlocks) them.blocked = true;
         else hit(1);
       } else if (me.combo) {
-        hit(1); // 공격 부분 — 스킬이라 방어를 뚫는다
+        hit(f.skill.comboDmg ?? 1); // 공격 부분 — 스킬이라 방어를 뚫는다
         if (them.choice === 'attack') { hit(TURN.counterMul); me.countered = true; }
       } else if (me.choice === 'defend') {
         if (them.choice === 'attack') { hit(TURN.counterMul); me.countered = true; }

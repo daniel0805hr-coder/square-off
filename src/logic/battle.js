@@ -3,7 +3,7 @@
 // inputs = { 1: { up, down, left, right, attack, special }, 2: {...} }
 //   이동 4개는 "누르고 있는가", attack/special은 "이번 프레임에 눌렀는가"
 
-import { STATS, MOVES, TOPDOWN as T } from './balance.js';
+import { STATS, MOVES, ULTIMATES, TOPDOWN as T } from './balance.js';
 import { WHITE } from './chess.js';
 import { maxHp, currentHp, attackStat } from './units.js';
 
@@ -34,9 +34,11 @@ function makeFighter(piece, role, shieldReady) {
     body: mv.body,
     attackTime: 0, attackCd: 0, attackHit: false,
     specialCd: 0,
-    dashTime: 0, dashX: 0, dashY: 0,
-    jumpTime: 0, jumpFrom: null, jumpTo: null,
-    chargeTime: 0, chargeX: 0, chargeY: 0,
+    ult: ULTIMATES[piece.type], ultUsed: false,
+    // 대시·점프·돌진은 평소 스킬과 필살기가 같은 움직임을 쓴다. *Spec = 지금 쓰는 쪽의 수치
+    dashTime: 0, dashX: 0, dashY: 0, dashSpec: mv.special, dashLeft: 0, dashHit: false,
+    jumpTime: 0, jumpFrom: null, jumpTo: null, jumpSpec: mv.special,
+    chargeTime: 0, chargeX: 0, chargeY: 0, chargeSpec: mv.special, chargeLeft: 0,
     stun: 0, shieldTime: 0, shieldReady: Boolean(shieldReady), shieldUsed: false,
     invuln: 0, kbx: 0, kby: 0,
   };
@@ -98,7 +100,8 @@ export class Battle {
 
     if (!this.busy(f)) {
       if (inp.attack && f.attackCd <= 0) this.doAttack(f);
-      if (inp.special && f.specialCd <= 0) this.doSpecial(f, moving ? dx : f.fx, moving ? dy : f.fy, moving ? dx : 0, moving ? dy : 0);
+      if (inp.ultimate && !f.ultUsed) this.doUltimate(f, moving ? dx : f.fx, moving ? dy : f.fy, moving ? dx : 0, moving ? dy : 0);
+      else if (inp.special && f.specialCd <= 0) this.doSpecial(f, moving ? dx : f.fx, moving ? dy : f.fy, moving ? dx : 0, moving ? dy : 0);
     }
 
     // 이동
@@ -108,11 +111,11 @@ export class Battle {
     } else if (f.jumpTime > 0) {
       this.updateJump(f, dt);
     } else if (f.chargeTime > 0) {
-      vx = f.chargeX * f.speed * f.mv.special.speedMul;
-      vy = f.chargeY * f.speed * f.mv.special.speedMul;
+      vx = f.chargeX * f.speed * f.chargeSpec.speedMul;
+      vy = f.chargeY * f.speed * f.chargeSpec.speedMul;
     } else if (f.dashTime > 0) {
-      vx = f.dashX * f.speed * f.mv.special.speedMul;
-      vy = f.dashY * f.speed * f.mv.special.speedMul;
+      vx = f.dashX * f.speed * f.dashSpec.speedMul;
+      vy = f.dashY * f.speed * f.dashSpec.speedMul;
     } else {
       const mul = f.attackTime > 0 ? T.attackMoveSlow : 1;
       vx = dx * f.speed * mul;
@@ -127,18 +130,24 @@ export class Battle {
     if (f.chargeTime > 0) {
       if (hitWall) {
         f.chargeTime = 0;
-        f.stun = f.mv.special.wallStun;
-        this.events.push({ type: 'wallStun', fighter: f });
+        if (f.chargeSpec.wallStun > 0) {
+          f.stun = f.chargeSpec.wallStun;
+          f.chargeLeft = 0;
+          this.events.push({ type: 'wallStun', fighter: f });
+        }
       } else {
         f.chargeTime = Math.max(0, f.chargeTime - dt);
         this.checkCharge(f, this.foeOf(f));
       }
+      if (f.chargeTime <= 0 && f.chargeLeft > 0 && f.stun <= 0) { f.chargeLeft--; this.startCharge(f, this.foeOf(f).x - f.x, this.foeOf(f).y - f.y); }
     }
+    if (f.dashTime > 0 && f.dashSpec.damageMul) this.checkRush(f, this.foeOf(f));
 
     f.attackTime = Math.max(0, f.attackTime - dt);
     f.attackCd = Math.max(0, f.attackCd - dt);
     f.specialCd = Math.max(0, f.specialCd - dt);
     f.dashTime = Math.max(0, f.dashTime - dt);
+    if (f.dashTime <= 0 && f.dashLeft > 0) { f.dashLeft--; this.startDash(f, f.fx, f.fy); } // 필살기 연속 대시
     f.stun = Math.max(0, f.stun - dt);
     f.shieldTime = Math.max(0, f.shieldTime - dt);
     f.invuln = Math.max(0, f.invuln - dt);
@@ -237,44 +246,107 @@ export class Battle {
     f.specialCd = sp.cooldown;
 
     if (sp.kind === 'dash') {
-      [f.dashX, f.dashY] = sp.aim === 'facing' ? [f.fx, f.fy] : norm(ax, ay);
-      f.dashTime = sp.time;
-      f.invuln = Math.max(f.invuln, sp.time);
-      this.events.push({ type: 'dash', fighter: f });
+      f.dashSpec = sp;
+      f.dashLeft = 0;
+      if (sp.aim === 'facing') this.startDash(f, f.fx, f.fy);
+      else this.startDash(f, ...norm(ax, ay));
     } else if (sp.kind === 'jump') {
-      // L자: 앞으로 2칸 + 옆으로 1칸. 옆 방향은 누르고 있는 방향 쪽 (없으면 오른쪽)
-      const px = -f.fy, py = f.fx;
-      const side = ix * px + iy * py < 0 ? -1 : 1;
-      f.jumpFrom = { x: f.x, y: f.y };
-      f.jumpTo = {
-        x: Math.max(-HW + f.body, Math.min(HW - f.body, f.x + f.fx * sp.forward + px * side * sp.side)),
-        y: Math.max(-HH + f.body, Math.min(HH - f.body, f.y + f.fy * sp.forward + py * side * sp.side)),
-      };
-      f.jumpTime = sp.time;
-      this.events.push({ type: 'jump', fighter: f });
+      this.startJump(f, sp, ix, iy);
     } else if (sp.kind === 'blink') {
-      const options = diagonalsFor(ax, ay);
-      // 정면이면 두 대각선 중 경기장 가운데 쪽으로
-      const [bx, by] = options.length > 1
-        ? options.sort((p, q) => (p[0] * f.x + p[1] * f.y) - (q[0] * f.x + q[1] * f.y))[0]
-        : options[0];
-      const from = { x: f.x, y: f.y };
-      f.x += bx * sp.distance; f.y += by * sp.distance;
-      this.clamp(f);
-      f.fx = bx; f.fy = by;
-      f.invuln = Math.max(f.invuln, sp.invuln);
-      this.events.push({ type: 'blink', fighter: f, from });
+      this.blink(f, sp, ax, ay);
     } else if (sp.kind === 'charge') {
-      // 직선 4방향으로만 돌진
-      if (Math.abs(f.fx) >= Math.abs(f.fy)) { f.chargeX = sign(f.fx); f.chargeY = 0; } else { f.chargeX = 0; f.chargeY = sign(f.fy); }
-      f.fx = f.chargeX; f.fy = f.chargeY;
-      f.chargeTime = sp.maxTime;
-      this.events.push({ type: 'charge', fighter: f });
+      f.chargeSpec = sp;
+      f.chargeLeft = 0;
+      this.startCharge(f, f.fx, f.fy);
     }
   }
 
+  // 필살기 (전투당 1회). 평소 스킬의 강화판
+  doUltimate(f, ax, ay, ix, iy) {
+    const u = f.ult;
+    f.ultUsed = true;
+    this.events.push({ type: 'ultimate', fighter: f, name: u.name });
+    if (u.kind === 'rush') {
+      f.dashSpec = u;
+      f.dashLeft = u.count - 1;
+      this.startDash(f, ...norm(ax, ay));
+    } else if (u.kind === 'jump') {
+      this.startJump(f, u, ix, iy);
+    } else if (u.kind === 'volley') {
+      this.blink(f, u, ax, ay);
+      for (let i = 0; i < u.bolts; i++) {
+        const a = (i / u.bolts) * Math.PI * 2;
+        this.fire(f, Math.cos(a), Math.sin(a), u, u.damageMul);
+      }
+    } else if (u.kind === 'charge') {
+      f.chargeSpec = u;
+      f.chargeLeft = u.count - 1;
+      const foe = this.foeOf(f);
+      this.startCharge(f, foe.x - f.x, foe.y - f.y);
+    } else if (u.kind === 'nova') {
+      const foe = this.foeOf(f);
+      this.events.push({ type: 'nova', fighter: f, radius: u.radius });
+      if (Math.hypot(foe.x - f.x, foe.y - f.y) < u.radius + foe.body && this.canBeHit(foe)) {
+        const [nx, ny] = norm(foe.x - f.x, foe.y - f.y);
+        this.damage(f, foe, Math.max(1, Math.round(f.damage * u.damageMul)), nx, ny, u.knockback);
+      }
+    }
+  }
+
+  startDash(f, dx, dy) {
+    [f.dashX, f.dashY] = [dx, dy];
+    f.fx = dx; f.fy = dy;
+    f.dashTime = f.dashSpec.time;
+    f.dashHit = false;
+    f.invuln = Math.max(f.invuln, f.dashSpec.time);
+    this.events.push({ type: 'dash', fighter: f });
+  }
+
+  // 필살기 대시: 부딪히면 피해 (대시마다 1번)
+  checkRush(f, foe) {
+    if (f.dashHit || Math.hypot(foe.x - f.x, foe.y - f.y) > f.body + foe.body + 4 || !this.canBeHit(foe)) return;
+    f.dashHit = true;
+    this.damage(f, foe, Math.max(1, Math.round(f.damage * f.dashSpec.damageMul)), f.dashX, f.dashY, T.knockback);
+  }
+
+  // 직선 4방향으로만 돌진
+  startCharge(f, dx, dy) {
+    if (Math.abs(dx) >= Math.abs(dy)) { f.chargeX = sign(dx); f.chargeY = 0; } else { f.chargeX = 0; f.chargeY = sign(dy); }
+    f.fx = f.chargeX; f.fy = f.chargeY;
+    f.chargeTime = f.chargeSpec.maxTime;
+    this.events.push({ type: 'charge', fighter: f });
+  }
+
+  startJump(f, sp, ix, iy) {
+    // L자: 앞으로 2칸 + 옆으로 1칸. 옆 방향은 누르고 있는 방향 쪽 (없으면 오른쪽)
+    f.jumpSpec = sp;
+    const px = -f.fy, py = f.fx;
+    const side = ix * px + iy * py < 0 ? -1 : 1;
+    f.jumpFrom = { x: f.x, y: f.y };
+    f.jumpTo = {
+      x: Math.max(-HW + f.body, Math.min(HW - f.body, f.x + f.fx * sp.forward + px * side * sp.side)),
+      y: Math.max(-HH + f.body, Math.min(HH - f.body, f.y + f.fy * sp.forward + py * side * sp.side)),
+    };
+    f.jumpTime = sp.time;
+    this.events.push({ type: 'jump', fighter: f });
+  }
+
+  blink(f, sp, ax, ay) {
+    const options = diagonalsFor(ax, ay);
+    // 정면이면 두 대각선 중 경기장 가운데 쪽으로
+    const [bx, by] = options.length > 1
+      ? options.sort((p, q) => (p[0] * f.x + p[1] * f.y) - (q[0] * f.x + q[1] * f.y))[0]
+      : options[0];
+    const from = { x: f.x, y: f.y };
+    f.x += bx * sp.distance; f.y += by * sp.distance;
+    this.clamp(f);
+    f.fx = bx; f.fy = by;
+    f.invuln = Math.max(f.invuln, sp.invuln);
+    this.events.push({ type: 'blink', fighter: f, from });
+  }
+
   updateJump(f, dt) {
-    const sp = f.mv.special;
+    const sp = f.jumpSpec;
     f.jumpTime = Math.max(0, f.jumpTime - dt);
     const t = 1 - f.jumpTime / sp.time;
     f.x = f.jumpFrom.x + (f.jumpTo.x - f.jumpFrom.x) * t;
@@ -294,7 +366,7 @@ export class Battle {
     if (Math.hypot(foe.x - f.x, foe.y - f.y) > f.body + foe.body + 4) return;
     f.chargeTime = 0;
     if (!this.canBeHit(foe)) return;
-    const sp = f.mv.special;
+    const sp = f.chargeSpec;
     this.damage(f, foe, Math.max(1, Math.round(f.damage * sp.damageMul)), f.chargeX, f.chargeY, sp.knockback);
   }
 

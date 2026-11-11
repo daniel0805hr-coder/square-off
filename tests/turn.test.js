@@ -164,7 +164,7 @@ test('회복: HP 회복, 공격받으면 끊김, 전투당 2회', () => {
 
 test('턴제는 HP가 늘어난 상태로 싸우고, 판으로는 원래 비율로 돌아감', () => {
   const b = new TurnBattle(W('Q'), B('P', { hp: 10 }));
-  assert.equal(b.attacker.maxHp, 50 * TURN.hpMul);
+  assert.equal(b.attacker.maxHp, 40 * TURN.hpMul);
   assert.equal(b.defender.hp, 10 * TURN.hpMul);
   assert.equal(b.boardHp(b.defender), 10);
   b.defender.hp = 1;

@@ -69,11 +69,11 @@ test('룩 도망자: 등 뒤에 벽 블록 설치 (최대 4개)', () => {
   assert.equal(ch.grid.flat().filter((v) => v === BLOCK).length, 1);
 });
 
-test('킹 도망자: 은신 1회', () => {
+test('킹 도망자: 은신 2회', () => {
   const ch = new Chase(W('Q'), B('K'), { grid: open() });
   ch.step(DT, { 2: { special: true } });
   assert.ok(ch.defender.stealthTime > 0);
-  assert.equal(ch.defender.usesLeft, 0);
+  assert.equal(ch.defender.usesLeft, 1);
 });
 
 test('비숍 도망자: 대각선 순간이동 1회', () => {

@@ -11,7 +11,9 @@ const power = (piece) => currentHp(piece) / 10 + attackStat(piece) + STATS[piece
 
 // 잡기 = 전투이므로 확실한 이득이 아니다. 스탯 합 차이로 대충 승률을 어림한다.
 export function captureWinChance(attacker, defender) {
-  return Math.min(0.9, Math.max(0.1, 0.5 + (power(attacker) - power(defender)) * 0.06));
+  // 스탯 합이 압축돼서(밸런스 패치) 기물 가치 차이도 반영: 폰→퀸 약 12%, 퀸→폰 약 88%
+  const rank = (VALUE[attacker.type] - VALUE[defender.type]) * 0.04;
+  return Math.min(0.9, Math.max(0.1, 0.5 + (power(attacker) - power(defender)) * 0.06 + rank));
 }
 
 // 체스판에서 둘 수 고르기. 한 수 앞만 보는 단순한 방식 + 약간의 무작위.
@@ -112,6 +114,17 @@ export class BattleBot {
         const side = chance(0.5) ? 1 : -1;
         return { ...toKeys(-dy * side - dx * 0.5, dx * side - dy * 0.5), special: true };
       }
+    }
+
+    // 필살기 (전투당 1회): 맞힐 수 있는 거리·방향일 때
+    if (!me.ultUsed && me.ult && chance(this.cfg.attackChance * 0.3)) {
+      const u = me.ult, line = Math.abs(dx) < 12 || Math.abs(dy) < 12;
+      const ok = (u.kind === 'rush' && dist < 110)
+        || (u.kind === 'jump' && dist > 50 && dist < 120 && facing > 0.7)
+        || (u.kind === 'volley' && dist < 200)
+        || (u.kind === 'charge' && dist > 40 && dist < 220 && line)
+        || (u.kind === 'nova' && dist < u.radius + foe.body);
+      if (ok) return { ...toward, ultimate: true };
     }
 
     // 특수기로 공격·접근
