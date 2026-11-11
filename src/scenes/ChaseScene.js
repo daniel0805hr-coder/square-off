@@ -13,6 +13,8 @@ const ARENA_X = 320; // 미로 중심 (화면 좌표)
 const ARENA_Y = 190;
 const ROLE_NAME = { attacker: '술래', defender: '도망자' };
 const SPECIAL_NAME = { jump: '점프', blink: '순간이동', block: '벽 블록', dash: '대시', stealth: '은신' };
+// 아래 키 안내: 한쪽이 화면 절반을 넘지 않게 접는다 (두 줄까지)
+const HELP_W = 290;
 const INTRO_TIME = 1.4;
 const END_TIME = 1.8;
 const GRASS = 0x3d5a34, GRASS_DARK = 0x34502c, TREE_TOP = 0x1f3a1c, TREE_EDGE = 0x152814, BUSH = 0x6f9a4a, STONE = 0x8c8f99;
@@ -196,8 +198,8 @@ export class ChaseScene extends Phaser.Scene {
       const keys = keyLabels(f.player);
       const sp = f.mv.special;
       const help = this.bot?.player === f.player ? '컴퓨터가 조종'
-        : `이동 ${keys.move}` + (sp ? `  스킬(${SPECIAL_NAME[sp.kind]}) ${keys.skill}` : '  (스킬 없음 — 자동 능력)');
-      this.add.text(x, 326, help, text(10, '#8d8798', FONT_SMALL)).setOrigin(left ? 0 : 1, 0);
+        : `이동 ${keys.move}` + (sp ? ` · 스킬(${SPECIAL_NAME[sp.kind]}) ${keys.skill}` : ' · 스킬 없음 (자동 능력)');
+      this.add.text(x, 324, help, { ...text(10, '#8d8798', FONT_SMALL), align: left ? 'left' : 'right', lineSpacing: 1, wordWrap: { width: HELP_W } }).setOrigin(left ? 0 : 1, 0);
       this.hud[f.role] = {
         special: this.add.text(x, 46, '', text(10, '#8d8798', FONT_SMALL)).setOrigin(left ? 0 : 1, 0),
       };

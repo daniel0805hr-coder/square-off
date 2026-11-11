@@ -14,6 +14,10 @@ const ROLE_NAME = { attacker: '공격', defender: '수비' };
 // 투기장 모래에서 튀는 흙먼지·돌 조각 색 (필살기 착지·충격파)
 const SAND_DUST = ['#3b2a18', '#6b4e2c', '#8a6a3e', '#a8864e', '#c9a86a', '#e2c992', '#fff4d8'];
 const SAND_STONE = '#7a5a2a';
+// 위쪽 정보 판 안 배치: 막대 폭과 그 옆 글자 자리 (판 폭 238 안에 들어가게)
+const BAR_W = 144;
+// 아래 키 안내: 한쪽이 화면 절반을 넘지 않게 접는다 (두 줄까지)
+const HELP_W = 290;
 const HEAD = 30; // 판정 중심에서 서 있는 말 머리 위까지 (글자 자리)
 const MID = 12;  // 판정 중심에서 말 몸통 가운데까지 (실드 자리)
 const SPECIAL_NAME = { P: '대시', N: '점프', B: '순간이동', R: '돌진', Q: '대시', K: '실드' };
@@ -297,14 +301,14 @@ export class BattleScene extends Phaser.Scene {
         text(12, PLAYER_HEX[f.player])).setOrigin(left ? 0 : 1, 0);
       const keys = keyLabels(f.player);
       const help = this.bot?.player === f.player ? '컴퓨터가 조종'
-        : `이동 ${keys.move}  공격 ${keys.confirm}  스킬(${SPECIAL_NAME[f.type]}) ${keys.skill} · 길게 = 필살기`;
-      this.add.text(x, 326, help, text(10, '#8d8798', FONT_SMALL)).setOrigin(left ? 0 : 1, 0);
+        : `이동 ${keys.move} · 공격 ${keys.confirm} · 스킬(${SPECIAL_NAME[f.type]}) ${keys.skill} · 길게 누르면 필살기`;
+      this.add.text(x, 324, help, { ...text(10, '#8d8798', FONT_SMALL), align: left ? 'left' : 'right', lineSpacing: 1, wordWrap: { width: HELP_W } }).setOrigin(left ? 0 : 1, 0);
       this.hud[f.role] = {
         bar: this.add.graphics(),
-        hp: this.add.text(left ? x + 164 : x - 164, 32, '', text(10, '#d8d2c4', FONT_SMALL)).setOrigin(left ? 0 : 1, 0),
-        special: this.add.text(left ? x + 164 : x - 164, 44, '', text(10, '#8d8798', FONT_SMALL)).setOrigin(left ? 0 : 1, 0),
+        hp: this.add.text(left ? x + BAR_W + 4 : x - BAR_W - 4, 32, '', text(10, '#d8d2c4', FONT_SMALL)).setOrigin(left ? 0 : 1, 0),
+        special: this.add.text(left ? x + BAR_W + 4 : x - BAR_W - 4, 44, '', text(10, '#8d8798', FONT_SMALL)).setOrigin(left ? 0 : 1, 0),
         ult: this.add.text(left ? x + 222 : x - 222, 16, '', text(10, '#8d8798', FONT_SMALL)).setOrigin(left ? 1 : 0, 0),
-        x: left ? x : x - 160,
+        x: left ? x : x - BAR_W,
       };
     }
     this.timer = this.add.text(320, 16, '', text(15, '#f2ead8', FONT_BIG)).setOrigin(0.5, 0);
@@ -327,13 +331,13 @@ export class BattleScene extends Phaser.Scene {
     for (const f of b.fighters) {
       const h = this.hud[f.role];
       h.bar.clear();
-      h.bar.fillStyle(0x3a3746).fillRect(h.x, 33, 160, 8);
-      h.bar.fillStyle(PLAYER_COLOR[f.player]).fillRect(h.x, 33, Math.round(160 * f.hp / f.maxHp), 8);
+      h.bar.fillStyle(0x3a3746).fillRect(h.x, 33, BAR_W, 8);
+      h.bar.fillStyle(PLAYER_COLOR[f.player]).fillRect(h.x, 33, Math.round(BAR_W * f.hp / f.maxHp), 8);
       h.hp.setText(`${Math.ceil(f.hp)}/${f.maxHp}`);
       // 특수기 쿨타임 바: 차오르는 중이면 회색, 다 차면 노란색
       const s = this.specialState(f);
-      h.bar.fillStyle(0x3a3746).fillRect(h.x, 46, 160, 4);
-      h.bar.fillStyle(s.ready ? READY : CHARGING).fillRect(h.x, 46, Math.round(160 * s.progress), 4);
+      h.bar.fillStyle(0x3a3746).fillRect(h.x, 46, BAR_W, 4);
+      h.bar.fillStyle(s.ready ? READY : CHARGING).fillRect(h.x, 46, Math.round(BAR_W * s.progress), 4);
       setLabel(h.special, s.label, s.ready ? '#ffe08a' : '#8d8798');
       setLabel(h.ult, f.ultUsed ? '필살기 사용함' : '필살기 준비', f.ultUsed ? '#5a5566' : '#ffe08a');
     }
