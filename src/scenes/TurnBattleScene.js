@@ -102,7 +102,8 @@ export class TurnBattleScene extends Phaser.Scene {
 
   startTurn() {
     this.banner.setText('');
-    this.center.setText('');
+    const sudden = this.battle.suddenMul;
+    this.center.setText(sudden > 1 ? `서든데스! 이번 턴 피해 ×${sudden}` : '');
     this.choice = { 1: null, 2: null };
     for (const p of [1, 2]) this.choiceText[p].setText('');
     const first = this.battle.revealedFirst();
@@ -181,7 +182,7 @@ export class TurnBattleScene extends Phaser.Scene {
 
   // 결과 설명 (가운데 글자)
   describe(report) {
-    const lines = [`턴 ${report.turn}`];
+    const lines = [`턴 ${report.turn}` + (report.sudden > 1 ? ` · 피해 ×${report.sudden}` : '')];
     for (const f of this.battle.fighters) {
       const s = report.side[f.role];
       const who = `P${f.player}`;
@@ -211,11 +212,14 @@ export class TurnBattleScene extends Phaser.Scene {
     const b = this.battle;
     const winner = b[b.winner];
     this.banner.setText(endTitle(b.winner, this.duel)).setColor(PLAYER_HEX[winner.player]);
-    this.center.setText(b.reason === 'ko' ? 'KO' : `${TURN.maxTurns}턴 종료 — 둘 다 제자리로`);
+    const ratio = (f) => `${Math.round((f.hp / f.maxHp) * 100)}%`;
+    const judge = `${TURN.maxTurns}턴 종료 — 판정 (남은 HP ${ratio(b.attacker)} vs ${ratio(b.defender)})`;
+    this.center.setText(b.reason === 'ko' ? 'KO'
+      : b.winner === 'attacker' ? judge : `${judge}\n둘 다 제자리로`);
     for (const p of [1, 2]) this.choiceText[p].setText('');
     const loser = b.foeOf(winner);
-    // KO = 맞은 쪽 바깥으로 쓰러짐, 턴 종료 = 흐리게
-    if (b.reason === 'ko') {
+    // KO·공격자 판정승 = 진 쪽이 잡힘 (쓰러짐), 방어자 판정승 = 흐리게 (둘 다 제자리)
+    if (b.reason === 'ko' || b.winner === 'attacker') {
       const x = SPOT_X[loser.player];
       this.views[loser.player].fall(loser.player === 1 ? -1 : 1);
       this.pfx.play(FX.critHit, { x, y: FEET_Y, height: FEET_Y - SPOT_Y, aim: loser.player === 1 ? Math.PI : 0, palette: RAMP[winner.player] });
@@ -316,7 +320,8 @@ export class TurnBattleScene extends Phaser.Scene {
 
   refresh() {
     const b = this.battle;
-    this.turnText.setText(b.deathmatch ? `턴 ${b.turn} · 결전` : `턴 ${Math.min(b.turn, TURN.maxTurns)}/${TURN.maxTurns}`);
+    this.turnText.setText(b.deathmatch ? `턴 ${b.turn} · 결전` : `턴 ${Math.min(b.turn, TURN.maxTurns)}/${TURN.maxTurns}`)
+      .setColor(b.suddenMul > 1 && !b.finished ? '#ff6a5a' : '#f2ead8'); // 서든데스면 빨간 글자
     for (const f of b.fighters) {
       const p = f.player;
       const h = this.hud[p];

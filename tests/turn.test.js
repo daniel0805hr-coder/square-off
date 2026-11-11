@@ -108,11 +108,51 @@ test('스킬이 방어를 뚫으면 추가 피해', () => {
   assert.equal(r1.side.attacker.pierced, true);
 });
 
-test('5턴 동안 KO 없으면 방어 성공 (시간 종료)', () => {
+// 룩끼리 방어·성벽만 번갈아 쓰면 서로 피해가 0 → HP가 그대로인 채 최대 턴까지 간다
+const stall = (b) => { for (let i = 0; i < TURN.maxTurns; i++) turn(b, i % 2 ? 'skill' : 'defend', i % 2 ? 'skill' : 'defend'); };
+
+test('최대 턴까지 KO 없고 HP 비율이 같으면 방어자 승리 (시간 종료)', () => {
   const b = new TurnBattle(W('R'), B('R'));
-  for (let i = 0; i < TURN.maxTurns; i++) turn(b, i % 2 ? 'skill' : 'defend', i % 2 ? 'skill' : 'defend');
+  stall(b);
   assert.equal(b.winner, 'defender');
   assert.equal(b.reason, 'time');
+});
+
+test('판정: 남은 HP 비율이 높은 쪽 승리 (공격자도 판정승 가능)', () => {
+  const atk = new TurnBattle(W('R'), B('R', { hp: 20 }));
+  stall(atk);
+  assert.equal(atk.winner, 'attacker');
+  assert.equal(atk.reason, 'time');
+  const def = new TurnBattle(W('R', { hp: 20 }), B('R'));
+  stall(def);
+  assert.equal(def.winner, 'defender');
+});
+
+test('서든데스: 5턴째부터 피해가 매 턴 25%씩 커짐', () => {
+  const dealt = (t) => {
+    const b = new TurnBattle(W('R'), B('R'));
+    b.turn = t;
+    return turn(b, 'attack', 'focus').side.attacker.dealt;
+  };
+  const base = dealt(1);
+  assert.equal(dealt(4), base);
+  assert.equal(dealt(5), Math.round(base * 1.25));
+  assert.equal(dealt(8), Math.round(base * 2));
+});
+
+test('공격자 판정승도 잡기 성공: HP 보상 + 베테랑 (폰이 퀸을 판정으로 이김)', () => {
+  const b = new TurnBattle(W('P'), B('Q', { hp: 5 }));
+  b.turn = TURN.maxTurns; // 마지막 턴: 둘 다 방어 → 피해 없이 판정 (폰 HP 100% vs 퀸 HP 약 13%)
+  turn(b, 'defend', 'defend');
+  assert.equal(b.reason, 'time');
+  assert.equal(b.winner, 'attacker');
+  // BoardScene과 같은 규칙: 공격자 승리 → outcome 'attacker'
+  const g = new ChessGame().loadFen('4k3/8/8/3q4/4P3/8/8/4K3 w - -');
+  const hp = b.boardHp(b.attacker);
+  const rec = g.move(sq('e4'), sq('d5'), 'Q', 'attacker', { attacker: hp, defender: b.boardHp(b.defender) });
+  assert.equal(g.pieceAt(sq('d5')).type, 'P');
+  assert.equal(g.pieceAt(sq('d5')).hp, Math.min(30, hp + 10)); // 폰 최대 HP 30
+  assert.deepEqual(rec.veteranPending, sq('d5'));
 });
 
 test('KO', () => {

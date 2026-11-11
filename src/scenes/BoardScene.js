@@ -587,7 +587,7 @@ export class BoardScene extends Phaser.Scene {
     }
     const { from, to, promotion } = this.pendingMove;
     this.pendingMove = null;
-    // KO = 진 쪽 제거, 시간 종료 = 방어 성공이지만 둘 다 제자리
+    // 공격자 승리(KO·턴제 판정승) = 잡기 성공 → 보상·베테랑 적용, 방어자 KO = 공격한 말 제거, 시간 종료 방어 = 둘 다 제자리
     const outcome = winner === 'attacker' ? 'attacker' : reason === 'time' ? 'retreat' : 'defender';
     // 쓰러진 말이 있던 칸에 연기
     if (outcome !== 'retreat') this.fxAt(FX.poof, outcome === 'attacker' ? to : from);

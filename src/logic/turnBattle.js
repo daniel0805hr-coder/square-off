@@ -2,6 +2,7 @@
 // 매 턴 options()로 고를 수 있는 행동을 확인하고, resolve({ attacker, defender })로 한 턴을 처리한다.
 // 행동: 'attack' | 'defend' | 'skill' | 'focus' | 'heal'
 // 턴제에서는 HP를 TURN.hpMul배로 늘려서 싸우고, 끝나면 boardHp()로 판 위 HP로 되돌린다.
+// 최대 턴까지 KO가 없으면 남은 HP 비율로 판정. 서든데스 턴부터는 피해가 매 턴 커진다.
 
 import { TOPDOWN, TURN, TURN_SKILLS } from './balance.js';
 import { WHITE } from './chess.js';
@@ -55,6 +56,11 @@ export class TurnBattle {
     return opts.length ? opts : ['attack']; // 다 막히면 공격은 항상 가능
   }
 
+  // 서든데스: 이번 턴 피해 배율 (킹 결전도 똑같이 적용 — 무한히 끌지 않도록)
+  get suddenMul() {
+    return 1 + Math.max(0, this.turn - TURN.suddenDeathFrom + 1) * TURN.suddenDeathStep;
+  }
+
   // 판 위로 돌아갈 HP (살아 있으면 최소 1)
   boardHp(f) {
     return f.hp > 0 ? Math.max(1, Math.round(f.hp / TURN.hpMul)) : 0;
@@ -91,9 +97,10 @@ export class TurnBattle {
       };
     }
     // 피해 계산 (동시에 적용)
+    const sudden = this.suddenMul;
     for (const f of this.fighters) {
       const me = side[f.role], foe = this.foeOf(f), them = side[foe.role];
-      const mul = (f.curse > 0 ? f.curseMul : 1) * (f.focused ? TURN.focusMul : 1);
+      const mul = (f.curse > 0 ? f.curseMul : 1) * (f.focused ? TURN.focusMul : 1) * sudden;
       const hit = (x) => me.hits.push(Math.max(1, Math.round(f.D * x * mul)));
       const foeBlocks = them.choice === 'defend' || them.combo;
       if (me.choice === 'attack') {
@@ -160,14 +167,15 @@ export class TurnBattle {
       Object.assign(f, next.get(f));
     }
 
-    const report = { turn: this.turn, side };
+    const report = { turn: this.turn, side, sudden };
     // 끝났는가
     if (a.hp <= 0 || d.hp <= 0) {
       // 동시에 쓰러지면 수비자 승리 (HP 1로 버팀)
       if (d.hp <= 0 && a.hp > 0) this.finish('attacker', 'ko');
       else { if (d.hp <= 0) d.hp = 1; this.finish('defender', 'ko'); }
     } else if (!this.deathmatch && this.turn >= TURN.maxTurns) {
-      this.finish('defender', 'time'); // 버티면 방어 성공
+      // 판정: 남은 HP 비율이 높은 쪽 승리, 동률이면 방어자 (공격자 판정승 = 잡기 성공, 방어자 판정승 = 둘 다 제자리)
+      this.finish(a.hp / a.maxHp > d.hp / d.maxHp ? 'attacker' : 'defender', 'time');
     }
     this.turn++;
     return report;
