@@ -9,12 +9,19 @@
 import { ACTIONS, remoteInput, actionFor, mouseCode, online } from '../input/controls.js';
 import { addGuestKeys } from './guestKeys.js';
 import { hostVideoStats, guestVideoStats, createStatsPanel } from './netstats.js';
+import { preferH264 } from './codec.js';
 
 const PREFIX = 'squareoff-';
 const GAME_W = 640, GAME_H = 360;
 const VIDEO_SCALE = 1; // 보내는 영상 크기 = 게임 화면 × 이 값. 1(640×360)이면 압축·전송·해제가 가벼워 지연이 준다 (2배는 1280×720이라 느린 PC에서 밀렸다)
 const PEER_FPS = 30;
 const PEER_BITRATE = 1_500_000; // 640×360 도트 화면에는 넉넉하다 (LAN·가정 회선 모두)
+// 가벼운 모드: 친구 PC가 저전력이라 영상 풀기가 버거울 때. 친구가 F8로 켜고 끄거나 링크 끝에 &lite=1
+const LITE_FPS = 20;
+const LITE_BITRATE = 600_000;
+const LITE_LAN_FPS = 12;
+const LITE_LAN_QUALITY = 0.7;
+const LITE_KEY = 'squareoff-lite'; // 친구 브라우저에 가벼운 모드 기억
 const LAN_FPS = 20;    // 같은 네트워크 방은 JPEG 사진을 연달아 보내므로 조금 낮춘다
 const LAN_QUALITY = 0.8;
 const CODE_CHARS = 'abcdefghjkmnpqrstuvwxyz23456789'; // 헷갈리는 글자(i, l, o, 0, 1) 제외
@@ -30,18 +37,24 @@ export function roomLink(code) {
 
 // 지연 최소화: 해상도는 640×360 고정이라 줄일 게 없으니 회선이 밀리면 해상도 대신 프레임을 조절하고(balanced),
 //   프레임은 30장 이하로 제한해 압축기가 밀리지 않게 한다.
-function tuneVideo(pc) {
+//   lite() = 가벼운 모드 여부. 반환값 apply()는 모드가 바뀌었을 때 다시 부른다
+function tuneVideo(pc, lite) {
   const apply = () => {
+    if (pc.connectionState !== 'connected') return;
     for (const sender of pc.getSenders()) {
       if (sender.track?.kind !== 'video') continue;
       const params = sender.getParameters();
       params.degradationPreference = 'balanced';
-      for (const enc of params.encodings || []) { enc.maxBitrate = PEER_BITRATE; enc.maxFramerate = PEER_FPS; }
+      for (const enc of params.encodings || []) {
+        enc.maxBitrate = lite() ? LITE_BITRATE : PEER_BITRATE;
+        enc.maxFramerate = lite() ? LITE_FPS : PEER_FPS;
+      }
       sender.setParameters(params).catch(() => {});
     }
   };
-  if (pc.connectionState === 'connected') apply();
-  else pc.addEventListener('connectionstatechange', () => { if (pc.connectionState === 'connected') apply(); });
+  pc.addEventListener('connectionstatechange', apply);
+  apply();
+  return apply;
 }
 
 const ERROR_TEXT = {
@@ -69,12 +82,15 @@ function minimizePlayoutDelay(pc) {
 
 // 연결 시작 때 영상 최소 시작 비트레이트를 올려 처음부터 선명하게 (SDP 한 줄 추가)
 const startBitrate = (sdp) => sdp.replace(/(a=fmtp:\d+ )/g, `$1x-google-start-bitrate=${PEER_BITRATE / 1000};`);
+// 호스트(제안)·친구(응답) 양쪽 SDP에서 H.264를 맨 앞으로 — 저전력 PC가 그래픽 칩으로 영상을 풀도록 (src/net/codec.js)
+const hostSdp = (sdp) => preferH264(startBitrate(sdp));
 
 // ───────── 호스트 공통 ─────────
 
 // 게임이 한 장면을 그릴 때마다 (최대 fps) 그 장면을 보통 캔버스에 2배로 복사해 onFrame으로 넘긴다
 //   게임 화면(그래픽 가속 WebGL)을 바로 영상으로 뜨면 검은 화면이 될 수 있어서, 그린 직후에 복사한다.
 //   2배로 키워 복사하면 영상 압축에도 도트 글자가 덜 뭉개진다
+//   반환값 setFps(n)으로 초당 장수를 바꿀 수 있다 (가벼운 모드)
 function mirrorFrames(game, fps, onFrame) {
   const mirror = document.createElement('canvas');
   mirror.width = GAME_W * VIDEO_SCALE;
@@ -90,11 +106,13 @@ function mirrorFrames(game, fps, onFrame) {
     onFrame(mirror);
   };
   game.events.on('postrender', copy);
-  return { mirror, stop: () => game.events.off('postrender', copy) };
+  return { mirror, setFps: (n) => { fps = n; }, stop: () => game.events.off('postrender', copy) };
 }
 
-function onGuestMessage(msg, onClick) {
-  if (msg?.t === 'down' || msg?.t === 'up') remoteInput({ action: msg.action, down: msg.t === 'down', source: msg.source });
+//   onMode(lite) — 친구가 가벼운 모드를 켜고 끔
+function onGuestMessage(msg, onClick, onMode) {
+  if (msg?.t === 'mode') onMode?.(!!msg.lite);
+  else if (msg?.t === 'down' || msg?.t === 'up') remoteInput({ action: msg.action, down: msg.t === 'down', source: msg.source });
   else if (msg?.t === 'click' && Number.isFinite(msg.x) && Number.isFinite(msg.y)) onClick({ x: msg.x, y: msg.y });
 }
 
@@ -138,10 +156,17 @@ function hostPeer({ game, onStatus, onClick }) {
     }
     conn = c;
     let statsTimer = null;
+    let lite = false;
+    let retune = () => {};
+    const setLite = (on) => {
+      lite = on;
+      frames.setFps(on ? LITE_FPS : PEER_FPS);
+      retune();
+    };
     c.on('open', () => {
       online.role = 'host';
-      call = peer.call(c.peer, stream, { sdpTransform: startBitrate });
-      tuneVideo(call.peerConnection);
+      call = peer.call(c.peer, stream, { sdpTransform: hostSdp });
+      retune = tuneVideo(call.peerConnection, () => lite);
       onStatus({ state: 'joined' });
       // 1초마다 인코딩 통계를 친구에게 알려 준다 (친구 화면 수치판용)
       let prev = null;
@@ -154,11 +179,12 @@ function hostPeer({ game, onStatus, onClick }) {
     });
     c.on('data', (msg) => {
       if (msg?.t === 'ping') c.send({ t: 'pong', id: msg.id });
-      else onGuestMessage(msg, onClick);
+      else onGuestMessage(msg, onClick, setLite);
     });
     c.on('close', () => {
       clearInterval(statsTimer);
       if (conn !== c) return;
+      setLite(false);
       conn = null;
       call?.close();
       call = null;
@@ -200,21 +226,26 @@ function hostLan({ game, onStatus, onClick }) {
 
     // 화면 올리기: 앞 사진이 다 올라간 뒤에 다음 사진 (느린 VPN에서는 자동으로 초당 장수가 줄어든다)
     let sending = false;
+    let quality = LAN_QUALITY;
     frames = mirrorFrames(game, LAN_FPS, (mirror) => {
       if (sending) return;
       sending = true;
       mirror.toBlob((blob) => {
         fetch('lan/frame', { method: 'POST', body: blob }).catch(() => {}).finally(() => { sending = false; });
-      }, 'image/jpeg', LAN_QUALITY);
+      }, 'image/jpeg', quality);
     });
+    const setLite = (on) => {
+      frames.setFps(on ? LITE_LAN_FPS : LAN_FPS);
+      quality = on ? LITE_LAN_QUALITY : LAN_QUALITY;
+    };
 
     events = new EventSource('lan/events');
     events.onmessage = (e) => {
       let msg = null;
       try { msg = JSON.parse(e.data); } catch { return; }
       if (msg.t === 'join') { online.role = 'host'; onStatus({ state: 'joined' }); }
-      else if (msg.t === 'leave') { releaseAll(); online.role = null; onStatus({ state: 'left' }); }
-      else onGuestMessage(msg, onClick);
+      else if (msg.t === 'leave') { releaseAll(); setLite(false); online.role = null; onStatus({ state: 'left' }); }
+      else onGuestMessage(msg, onClick, setLite);
     };
     onStatus({ state: 'waiting', links });
   })();
@@ -352,9 +383,44 @@ function sendGuestInput(root, screen, send) {
   screen.addEventListener('dragstart', (e) => e.preventDefault());
 }
 
+// 친구 화면의 가벼운 모드 (초당 장수·화질을 낮춰 저전력 PC의 영상 풀기 부담을 줄임)
+//   켜는 법: F8 키, 또는 링크 끝에 &lite=1 (&lite=0 = 끔). 이 브라우저에 기억해 둔다.
+//   send(msg)로 호스트에 알린다. 반환값: { get(), resend() } — 연결되면 resend()로 현재 모드를 다시 알림
+function guestLite(root, send) {
+  const param = new URLSearchParams(location.search).get('lite');
+  let lite = false;
+  try { lite = localStorage.getItem(LITE_KEY) === '1'; } catch { /* 저장 불가 */ }
+  if (param !== null) lite = param !== '0';
+  const toast = document.createElement('div');
+  Object.assign(toast.style, {
+    position: 'fixed', left: '50%', top: '12px', transform: 'translateX(-50%)', padding: '4px 10px', display: 'none',
+    background: '#1b1a24', border: '1px solid #4a4658', color: '#f2ead8', font: '12px Galmuri11, sans-serif', pointerEvents: 'none', zIndex: 15,
+  });
+  root.append(toast);
+  let toastTimer = null;
+  const announce = () => {
+    send({ t: 'mode', lite });
+    try { localStorage.setItem(LITE_KEY, lite ? '1' : '0'); } catch { /* 저장 불가 */ }
+  };
+  window.addEventListener('keydown', (e) => {
+    if (e.code !== 'F8' || e.repeat) return;
+    e.preventDefault();
+    lite = !lite;
+    announce();
+    toast.textContent = lite ? '가벼운 모드 켜짐 (초당 20장·낮은 화질) — F8로 끄기' : '가벼운 모드 꺼짐 (초당 30장) — F8로 켜기';
+    toast.style.display = 'block';
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toast.style.display = 'none'; }, 2500);
+  });
+  return { get: () => lite, resend: announce };
+}
+
 // 인터넷 링크 방에 들어간다 (?room=코드)
 export function joinRoom(code, root) {
   const video = Object.assign(document.createElement('video'), { autoplay: true, muted: true, playsInline: true });
+  // 영상을 소리·자막·화면 속 화면 없이 그냥 보여 주기만 (브라우저가 쓸데없는 처리를 안 하게)
+  video.disablePictureInPicture = true;
+  video.disableRemotePlayback = true;
   const say = guestView(root, video);
   say('방에 들어가는 중…');
   if (typeof Peer === 'undefined') { say(NO_PEERJS, true); return; }
@@ -363,10 +429,17 @@ export function joinRoom(code, root) {
   let conn = null;
   let hostStats = null, pingMs = null;
   const pingSent = { id: 0, at: 0 };
-  // 1초마다 연결 경로를 확인해, 중계 서버를 거치면(같은 공유기여도 해외 서버를 왕복해 크게 늦어짐) 화면에 안내.
-  //   주소에 &net=1 이 있으면 핑·영상 통계 수치판도 띄운다
-  const watchStats = (pc, getConn) => {
-    const show = new URLSearchParams(location.search).has('net') ? createStatsPanel(root) : null;
+  const lite = guestLite(root, (msg) => { if (conn?.open) conn.send(msg); });
+  // 진단 수치판: F9로 켜고 끔 (링크 끝 &net=1 이면 처음부터 켜짐)
+  const panel = createStatsPanel(root, new URLSearchParams(location.search).has('net'));
+  window.addEventListener('keydown', (e) => {
+    if (e.code !== 'F9' || e.repeat) return;
+    e.preventDefault();
+    panel.toggle();
+  });
+  // 2초마다 연결 경로를 확인해, 중계 서버를 거치면(같은 공유기여도 해외 서버를 왕복해 크게 늦어짐) 화면에 안내.
+  //   수치판이 켜져 있으면 1초마다 핑·영상 통계를 읽어 표시 (꺼져 있을 땐 부담을 줄이려고 덜 자주)
+  const watchStats = (pc) => {
     const warn = document.createElement('div');
     Object.assign(warn.style, {
       position: 'fixed', right: '8px', top: '8px', maxWidth: 'calc(100vw - 32px)', padding: '4px 8px', display: 'none',
@@ -374,15 +447,16 @@ export function joinRoom(code, root) {
     });
     warn.textContent = '중계 서버를 거쳐 연결돼 화면이 늦을 수 있어요.\n같은 와이파이·VPN이면 호스트가 "같은 네트워크 방"을 열어 주세요.';
     root.append(warn);
-    let prev = null;
+    let prev = null, tick = 0;
     setInterval(async () => {
-      const c = getConn();
-      if (show && c?.open) { pingSent.id++; pingSent.at = performance.now(); c.send({ t: 'ping', id: pingSent.id }); }
+      tick++;
+      if (!panel.visible && tick % 2) return;
+      if (panel.visible && conn?.open) { pingSent.id++; pingSent.at = performance.now(); conn.send({ t: 'ping', id: pingSent.id }); }
       const g = await guestVideoStats(pc, prev).catch(() => null);
       if (!g) return;
       prev = g;
       warn.style.display = g.path.startsWith('relay') ? 'block' : 'none';
-      if (show) { show(g, hostStats, pingMs); console.log('[net]', JSON.stringify({ g, hostStats, pingMs })); }
+      panel.update(g, hostStats, pingMs, lite.get());
     }, 1000);
   };
   // 정해진 시간 안에 호스트 화면이 안 오면 (네트워크가 직접 연결을 막는 경우 등) 안내
@@ -394,7 +468,7 @@ export function joinRoom(code, root) {
   peer.on('error', (err) => fail(errorText(err)));
   peer.on('open', () => {
     conn = peer.connect(PREFIX + code, { reliable: true });
-    conn.on('open', () => say('연결됨! 호스트 화면을 기다리는 중…'));
+    conn.on('open', () => { say('연결됨! 호스트 화면을 기다리는 중…'); lite.resend(); });
     conn.on('data', (msg) => {
       if (msg?.t === 'full') fail('이미 다른 친구가 들어와 있어요');
       else if (msg?.t === 'hstats') hostStats = msg.s;
@@ -403,10 +477,10 @@ export function joinRoom(code, root) {
     conn.on('close', () => { video.srcObject = null; fail('연결이 끊겼어요. 호스트에게 새 링크를 받아 다시 들어오세요'); });
   });
   peer.on('call', (call) => {
-    call.answer();
+    call.answer(undefined, { sdpTransform: preferH264 });
     minimizePlayoutDelay(call.peerConnection);
     call.peerConnection.addEventListener('track', () => minimizePlayoutDelay(call.peerConnection));
-    watchStats(call.peerConnection, () => conn);
+    watchStats(call.peerConnection);
     call.on('stream', (stream) => {
       video.srcObject = stream;
       video.play().catch(() => {});
@@ -437,7 +511,10 @@ export function joinLan(root) {
 
   // 입력은 순서가 바뀌지 않게 하나씩 차례로 보낸다
   let queue = Promise.resolve();
-  sendGuestInput(root, img, (msg) => {
+  const send = (msg) => {
     queue = queue.then(() => fetch(`lan/input?id=${id}`, { method: 'POST', body: JSON.stringify(msg) })).catch(() => {});
-  });
+  };
+  sendGuestInput(root, img, send);
+  const lite = guestLite(root, send);
+  img.addEventListener('load', () => lite.resend(), { once: true });
 }

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 // 브라우저 대신 가짜 window·패드로 패드 → 키 이벤트 변환을 확인
 const events = [];
 let frame = null;
-globalThis.window = {};
+globalThis.window = { addEventListener() {} };
 globalThis.document = { body: { dispatchEvent: (e) => events.push(`${e.type} ${e.code}`) } };
 globalThis.KeyboardEvent = class { constructor(type, { code }) { this.type = type; this.code = code; } };
 globalThis.requestAnimationFrame = (fn) => { frame = fn; };

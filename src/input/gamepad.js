@@ -50,14 +50,23 @@ function poll() {
   for (const [index, state] of pads) {
     if (!seen.has(index)) { releaseAll(state); pads.delete(index); }
   }
-  requestAnimationFrame(poll);
+  // 패드가 하나도 없으면 쉬었다가, 패드가 연결되면(gamepadconnected) 다시 돈다 — 저전력 PC에서 매 화면 검사 부담 줄이기
+  if (pads.size) requestAnimationFrame(poll);
+  else running = false;
 }
+
+const wake = () => {
+  if (running) return;
+  running = true;
+  requestAnimationFrame(poll);
+};
 
 // 한 번만 켠다 (main.js에서 호스트·친구 화면 모두)
 export function startGamepads() {
-  if (running || !navigator.getGamepads) return;
-  running = true;
-  requestAnimationFrame(poll);
+  if (!navigator.getGamepads || startGamepads.done) return;
+  startGamepads.done = true;
+  window.addEventListener('gamepadconnected', wake);
+  wake();
 }
 
 // 이 번호의 패드가 지금 연결돼 있는가
