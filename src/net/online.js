@@ -8,11 +8,13 @@
 
 import { ACTIONS, remoteInput, actionFor, mouseCode, online } from '../input/controls.js';
 import { addGuestKeys } from './guestKeys.js';
+import { hostVideoStats, guestVideoStats, createStatsPanel } from './netstats.js';
 
 const PREFIX = 'squareoff-';
 const GAME_W = 640, GAME_H = 360;
-const VIDEO_SCALE = 2; // 보내는 영상 크기 = 게임 화면 × 이 값
+const VIDEO_SCALE = 1; // 보내는 영상 크기 = 게임 화면 × 이 값. 1(640×360)이면 압축·전송·해제가 가벼워 지연이 준다 (2배는 1280×720이라 느린 PC에서 밀렸다)
 const PEER_FPS = 30;
+const PEER_BITRATE = 1_500_000; // 640×360 도트 화면에는 넉넉하다 (LAN·가정 회선 모두)
 const LAN_FPS = 20;    // 같은 네트워크 방은 JPEG 사진을 연달아 보내므로 조금 낮춘다
 const LAN_QUALITY = 0.8;
 const CODE_CHARS = 'abcdefghjkmnpqrstuvwxyz23456789'; // 헷갈리는 글자(i, l, o, 0, 1) 제외
@@ -26,14 +28,15 @@ export function roomLink(code) {
   return url.toString();
 }
 
-// 도트 화면이 뭉개지지 않게: 글자·선명도 우선, 해상도 유지, 넉넉한 비트레이트
+// 지연 최소화: 해상도는 640×360 고정이라 줄일 게 없으니 회선이 밀리면 해상도 대신 프레임을 조절하고(balanced),
+//   프레임은 30장 이하로 제한해 압축기가 밀리지 않게 한다.
 function tuneVideo(pc) {
   const apply = () => {
     for (const sender of pc.getSenders()) {
       if (sender.track?.kind !== 'video') continue;
       const params = sender.getParameters();
-      params.degradationPreference = 'maintain-resolution';
-      for (const enc of params.encodings || []) enc.maxBitrate = 3_000_000;
+      params.degradationPreference = 'balanced';
+      for (const enc of params.encodings || []) { enc.maxBitrate = PEER_BITRATE; enc.maxFramerate = PEER_FPS; }
       sender.setParameters(params).catch(() => {});
     }
   };
@@ -54,6 +57,18 @@ const SERVER_TIMEOUT = 10_000; // 연결 서버에 이 시간 안에 못 닿으�
 const JOIN_TIMEOUT = 15_000;   // 친구가 이 시간 안에 호스트 화면을 못 받으면 실패 안내
 const JOIN_FAILED = '호스트와 연결이 안 돼요.\n회사·학교 와이파이처럼 직접 연결을 막는 네트워크일 수 있어요.\n둘 중 한 명이 휴대폰 핫스팟 등 다른 네트워크로 바꿔서 다시 해보세요.';
 const LAN_FAILED = '호스트 PC의 게임 화면이 오지 않아요.\n호스트가 "같은 네트워크 방"을 열어 두었는지,\n두 PC가 같은 와이파이·VPN에 연결돼 있는지 확인하세요.';
+
+// 받는 쪽 재생 버퍼를 최소로: 브라우저 기본값은 영상이 매끄럽도록 수십~수백 ms를 쌓아 두는데, 게임은 바로 보여 주는 게 낫다
+function minimizePlayoutDelay(pc) {
+  for (const receiver of pc.getReceivers()) {
+    if (receiver.track?.kind !== 'video') continue;
+    try { receiver.jitterBufferTarget = 0; } catch { /* 지원 안 하는 브라우저 */ }
+    try { receiver.playoutDelayHint = 0; } catch { /* 지원 안 하는 브라우저 */ }
+  }
+}
+
+// 연결 시작 때 영상 최소 시작 비트레이트를 올려 처음부터 선명하게 (SDP 한 줄 추가)
+const startBitrate = (sdp) => sdp.replace(/(a=fmtp:\d+ )/g, `$1x-google-start-bitrate=${PEER_BITRATE / 1000};`);
 
 // ───────── 호스트 공통 ─────────
 
@@ -122,14 +137,27 @@ function hostPeer({ game, onStatus, onClick }) {
       return;
     }
     conn = c;
+    let statsTimer = null;
     c.on('open', () => {
       online.role = 'host';
-      call = peer.call(c.peer, stream);
+      call = peer.call(c.peer, stream, { sdpTransform: startBitrate });
       tuneVideo(call.peerConnection);
       onStatus({ state: 'joined' });
+      // 1초마다 인코딩 통계를 친구에게 알려 준다 (친구 화면 수치판용)
+      let prev = null;
+      statsTimer = setInterval(async () => {
+        const pc = call?.peerConnection;
+        if (!pc || !c.open) return;
+        const s = await hostVideoStats(pc, prev).catch(() => null);
+        if (s) { prev = s; c.send({ t: 'hstats', s }); }
+      }, 1000);
     });
-    c.on('data', (msg) => onGuestMessage(msg, onClick));
+    c.on('data', (msg) => {
+      if (msg?.t === 'ping') c.send({ t: 'pong', id: msg.id });
+      else onGuestMessage(msg, onClick);
+    });
     c.on('close', () => {
+      clearInterval(statsTimer);
       if (conn !== c) return;
       conn = null;
       call?.close();
@@ -333,6 +361,30 @@ export function joinRoom(code, root) {
 
   const peer = new Peer();
   let conn = null;
+  let hostStats = null, pingMs = null;
+  const pingSent = { id: 0, at: 0 };
+  // 1초마다 연결 경로를 확인해, 중계 서버를 거치면(같은 공유기여도 해외 서버를 왕복해 크게 늦어짐) 화면에 안내.
+  //   주소에 &net=1 이 있으면 핑·영상 통계 수치판도 띄운다
+  const watchStats = (pc, getConn) => {
+    const show = new URLSearchParams(location.search).has('net') ? createStatsPanel(root) : null;
+    const warn = document.createElement('div');
+    Object.assign(warn.style, {
+      position: 'fixed', right: '8px', top: '8px', maxWidth: 'calc(100vw - 32px)', padding: '4px 8px', display: 'none',
+      background: '#3a1f1f', color: '#ffcf9a', font: '11px Galmuri9, sans-serif', whiteSpace: 'pre-line', pointerEvents: 'none', zIndex: 15,
+    });
+    warn.textContent = '중계 서버를 거쳐 연결돼 화면이 늦을 수 있어요.\n같은 와이파이·VPN이면 호스트가 "같은 네트워크 방"을 열어 주세요.';
+    root.append(warn);
+    let prev = null;
+    setInterval(async () => {
+      const c = getConn();
+      if (show && c?.open) { pingSent.id++; pingSent.at = performance.now(); c.send({ t: 'ping', id: pingSent.id }); }
+      const g = await guestVideoStats(pc, prev).catch(() => null);
+      if (!g) return;
+      prev = g;
+      warn.style.display = g.path.startsWith('relay') ? 'block' : 'none';
+      if (show) { show(g, hostStats, pingMs); console.log('[net]', JSON.stringify({ g, hostStats, pingMs })); }
+    }, 1000);
+  };
   // 정해진 시간 안에 호스트 화면이 안 오면 (네트워크가 직접 연결을 막는 경우 등) 안내
   const joinTimer = setTimeout(() => say(JOIN_FAILED, true), JOIN_TIMEOUT);
   const fail = (text) => { clearTimeout(joinTimer); say(text, true); };
@@ -343,11 +395,18 @@ export function joinRoom(code, root) {
   peer.on('open', () => {
     conn = peer.connect(PREFIX + code, { reliable: true });
     conn.on('open', () => say('연결됨! 호스트 화면을 기다리는 중…'));
-    conn.on('data', (msg) => { if (msg?.t === 'full') fail('이미 다른 친구가 들어와 있어요'); });
+    conn.on('data', (msg) => {
+      if (msg?.t === 'full') fail('이미 다른 친구가 들어와 있어요');
+      else if (msg?.t === 'hstats') hostStats = msg.s;
+      else if (msg?.t === 'pong' && msg.id === pingSent.id) pingMs = Math.round(performance.now() - pingSent.at);
+    });
     conn.on('close', () => { video.srcObject = null; fail('연결이 끊겼어요. 호스트에게 새 링크를 받아 다시 들어오세요'); });
   });
   peer.on('call', (call) => {
     call.answer();
+    minimizePlayoutDelay(call.peerConnection);
+    call.peerConnection.addEventListener('track', () => minimizePlayoutDelay(call.peerConnection));
+    watchStats(call.peerConnection, () => conn);
     call.on('stream', (stream) => {
       video.srcObject = stream;
       video.play().catch(() => {});
