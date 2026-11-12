@@ -120,7 +120,12 @@ export class TurnBattle {
     }
     for (const f of this.fighters) {
       const me = side[f.role], them = side[this.foeOf(f).role];
-      if (them.wall && me.hits.length) { me.hits = []; them.effects.push('성벽이 모든 피해를 막음'); }
+      if (them.wall && me.hits.length) {
+        // 성벽: 받는 피해 × wallMul (0이면 전부 막음)
+        const mul = this.foeOf(f).skill.wallMul ?? 0;
+        me.hits = mul > 0 ? me.hits.map((x) => Math.max(1, Math.round(x * mul))) : [];
+        them.effects.push(mul > 0 ? `성벽이 피해를 ${Math.round((1 - mul) * 100)}% 막음` : '성벽이 모든 피해를 막음');
+      }
     }
     for (const f of this.fighters) {
       const dealt = side[f.role].hits.reduce((s, x) => s + x, 0);
@@ -147,7 +152,7 @@ export class TurnBattle {
       const me = side[f.role], foe = this.foeOf(f), them = side[foe.role];
       if (f.curse > 0) f.curse--;
       if (me.choice === 'skill') {
-        f.skillCd = TURN.skillCooldown;
+        f.skillCd = f.skill.cooldown ?? TURN.skillCooldown; // 스킬마다 따로 정할 수 있음 (룩 성벽)
         f.skillUsed = true;
       } else {
         f.skillCd = Math.max(0, f.skillCd - 1);

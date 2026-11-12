@@ -136,7 +136,10 @@ export const TURN_SKILLS = {
   N: { name: '허를 찌름', desc: '다음 턴 상대가 먼저 고르고 공개됨', dmg: 1.0, // [패치] 0.6→1.0
      foresight: true },
   B: { name: '저주', desc: '2턴 동안 상대 피해 50% 감소', dmg: 0.8, curseTurns: 2, curseMul: 0.5 }, // [패치] dmg 0.4→0.8, 감소 40→50%
-  R: { name: '성벽', desc: '이번 턴 받는 피해 모두 무효', dmg: 0, wall: true, cuttable: false },
+  // [패치 4] 성벽·방어만 번갈아 쓰면 피해를 거의 안 받아 보통 상대에게 84~100% 이겼다 (룩끼리는 수비 룩 100%)
+  //   → 성벽은 피해 60% 감소(wallMul 0.4, 예전 = 전부 무효)이고 쓴 뒤 2턴 쉼(cooldown 2). 번갈아 쓰기 승률 39~56%로
+  //   wallMul = 받는 피해 배율 (0이면 전부 막음), cooldown = 이 스킬만의 쿨타임 (없으면 TURN.skillCooldown)
+  R: { name: '성벽', desc: '이번 턴 받는 피해 60% 감소 (2턴 쉼)', dmg: 0, wall: true, wallMul: 0.4, cooldown: 2, cuttable: false },
   // [패치] comboDmg: 공격 부분 피해 배율 (신설, 기본 1). 퀸 연속 행동이 같은 스탯의 비숍을 80% 이길 만큼 강해 0.5로
   Q: { name: '연속 행동', desc: '공격 + 방어를 동시에 (1회)', combo: true, comboDmg: 0.5, cuttable: false, once: true },
   K: { name: '위엄', desc: '상대가 이번에 고른 행동을 다음 턴 봉인', dmg: 1.0, seal: true }, // [패치 2] 0.4→1.0: 턴제 킹 평균 43%→55%

@@ -43,10 +43,15 @@ test('폰 스킬: 2회 타격', () => {
   assert.equal(r.side.attacker.hits.length, 2);
 });
 
-test('룩 성벽: 공격에도 안 끊기고 모든 피해 무효', () => {
+test('룩 성벽: 공격에도 안 끊기고 받는 피해 60% 감소, 2턴 쉼', () => {
   const b = new TurnBattle(W('Q'), B('R'));
   turn(b, 'attack', 'skill');
-  assert.equal(b.defender.hp, b.defender.maxHp);
+  assert.equal(b.defender.hp, b.defender.maxHp - Math.round(b.attacker.D * 0.4));
+  assert.ok(!b.options(b.defender).includes('skill'));
+  turn(b, 'focus', 'focus');
+  assert.ok(!b.options(b.defender).includes('skill'));
+  turn(b, 'focus', 'defend');
+  assert.ok(b.options(b.defender).includes('skill'));
 });
 
 test('스킬은 연속으로 못 씀', () => {
@@ -108,8 +113,8 @@ test('스킬이 방어를 뚫으면 추가 피해', () => {
   assert.equal(r1.side.attacker.pierced, true);
 });
 
-// 룩끼리 방어·성벽만 번갈아 쓰면 서로 피해가 0 → HP가 그대로인 채 최대 턴까지 간다
-const stall = (b) => { for (let i = 0; i < TURN.maxTurns; i++) turn(b, i % 2 ? 'skill' : 'defend', i % 2 ? 'skill' : 'defend'); };
+// 서로 방어·집중만 번갈아 쓰면 피해가 0 → HP가 그대로인 채 최대 턴까지 간다
+const stall = (b) => { for (let i = 0; i < TURN.maxTurns; i++) turn(b, i % 2 ? 'focus' : 'defend', i % 2 ? 'focus' : 'defend'); };
 
 test('최대 턴까지 KO 없고 HP 비율이 같으면 방어자 승리 (시간 종료)', () => {
   const b = new TurnBattle(W('R'), B('R'));
