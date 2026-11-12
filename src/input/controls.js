@@ -4,7 +4,7 @@
 // 'Mouse0'~'Mouse4' = 마우스 버튼 (왼쪽, 가운데, 오른쪽, 뒤로, 앞으로)
 // 'Pad1:B0' = 게임패드 버튼 (gamepad.js). 동작마다 키(키보드·마우스) 하나와 패드 버튼 하나를 따로 가진다
 
-import { padCode, padName, padSlotConnected } from './gamepad.js';
+import { padCode, padName, padSlotConnected, rumbleSlots } from './gamepad.js';
 
 export const ACTIONS = ['up', 'down', 'left', 'right', 'confirm', 'skill', 'cancel', 'turnAttack', 'turnDefend', 'turnSkill', 'turnFocus', 'turnHeal'];
 // confirm = 체스판에서 선택 / 전투에서 공격, skill = 전투에서 기물별 특수기, cancel = 체스판·메뉴에서 취소
@@ -21,6 +21,17 @@ const PAD_DEFAULT = {
   turnAttack: 3, turnDefend: 5, turnSkill: 4, turnFocus: 7, turnHeal: 6,
 };
 export const isPad = (code) => code.startsWith('Pad');
+
+// 패드 고정 버튼: 어느 화면에서나 같은 뜻이라 키 설정에서 바꿀 수 없다
+//   십자키·왼쪽 스틱 = 이동, A = 선택·확인(클릭), B = 취소·뒤로, Start = 그만두기·나가기
+// 나머지 버튼(X·Y·LB·RB·LT·RT 등)만 스킬·턴제 동작에 자유롭게 지정한다
+export const PAD_FIXED = { up: 12, down: 13, left: 14, right: 15, confirm: 0, cancel: 1 };
+export const PAD_START = 9;
+const RESERVED = new Set([...Object.values(PAD_FIXED), PAD_START]);
+const padButton = (code) => Number(/:B(\d+)$/.exec(code)?.[1]);
+export const isFixedPadAction = (action) => action in PAD_FIXED;
+export const isReservedPad = (code) => isPad(code) && RESERVED.has(padButton(code));
+export const isStartButton = (code) => /^Pad\d+:B9$/.test(code);
 
 const KEY_DEFAULTS = {
   1: {
@@ -68,11 +79,31 @@ function loadBindings() {
   return clone(DEFAULT_BINDINGS);
 }
 
-// 패드 지원 전에 저장된 배치면 패드 기본 버튼을 붙인다
+// 패드 지원 전에 저장된 배치면 패드 기본 버튼을 붙이고, 고정 버튼은 늘 제자리로 맞춘다
 function withPads(saved) {
-  if ([1, 2].some((p) => Object.values(saved[p]).flat().some(isPad))) return saved;
-  for (const p of [1, 2]) for (const a of ACTIONS) saved[p][a].push(...padDefaults(p)[a]);
-  return saved;
+  if (![1, 2].some((p) => Object.values(saved[p]).flat().some(isPad))) {
+    for (const p of [1, 2]) for (const a of ACTIONS) saved[p][a].push(...padDefaults(p)[a]);
+  }
+  return fixPads(saved);
+}
+
+// 고정 동작은 자기 패드의 고정 버튼만, 다른 동작은 고정 버튼을 쓰지 못하게 (예전에 바꿔 둔 배치 고치기)
+function fixPads(b) {
+  for (const p of [1, 2]) {
+    for (const a of ACTIONS) {
+      const keys = b[p][a].filter((c) => !isPad(c));
+      const pads = isFixedPadAction(a) ? [padCode(p, PAD_FIXED[a])] : b[p][a].filter((c) => isPad(c) && !isReservedPad(c));
+      b[p][a] = [...keys, ...pads];
+    }
+    // 고정 버튼을 빼앗겨 패드 버튼이 없어진 동작은, 비어 있으면 기본 버튼을 돌려준다
+    const used = new Set(Object.values(b[p]).flat());
+    for (const a of ACTIONS) {
+      if (b[p][a].some(isPad)) continue;
+      const def = padDefaults(p)[a][0];
+      if (!used.has(def)) { b[p][a].push(def); used.add(def); }
+    }
+  }
+  return b;
 }
 
 function saveBindings() {
@@ -81,9 +112,18 @@ function saveBindings() {
 
 export const getBindings = () => bindings;
 
+// 패드 버튼을 이 동작에 지정할 수 없는 이유 (되면 null)
+export function padBlockReason(action, code) {
+  if (!isPad(code)) return null;
+  if (isFixedPadAction(action)) return '이동·선택·취소의 패드 버튼은 고정이에요 (십자키 · A · B)';
+  if (isReservedPad(code)) return 'A · B · 십자키 · Start는 고정 버튼이라 다른 동작에 못 써요';
+  return null;
+}
+
 // player의 action에 키(또는 패드 버튼) 하나를 지정. 다른 동작이 쓰던 키면 서로 맞바꾼다.
-// 키를 바꾸면 패드 버튼은 그대로, 패드 버튼을 바꾸면 키는 그대로 둔다
+// 키를 바꾸면 패드 버튼은 그대로, 패드 버튼을 바꾸면 키는 그대로 둔다. 고정 패드 버튼이면 바꾸지 않고 false
 export function setBinding(player, action, code) {
+  if (padBlockReason(action, code)) return false;
   const kind = isPad(code);
   const same = (c) => isPad(c) === kind;
   const previous = bindings[player][action].filter(same);
@@ -97,6 +137,7 @@ export function setBinding(player, action, code) {
   bindings[player][action] = [...bindings[player][action].filter((c) => !same(c)), code];
   version++;
   saveBindings();
+  return true;
 }
 
 export function resetBindings() {
@@ -147,6 +188,9 @@ export function usesPad(player) {
   return Object.values(bindings[player]).flat().filter(isPad).some((c) => padSlotConnected(Number(/^Pad(\d+)/.exec(c)[1])));
 }
 
+// 어느 플레이어든 패드를 쓰고 있는가 (메뉴 안내를 패드 버튼으로)
+export const anyPad = () => usesPad(1) || usesPad(2);
+
 // 화면 도움말용 요약
 export function keyLabels(player) {
   const b = bindings[player];
@@ -176,7 +220,16 @@ export function keyLabels(player) {
 // ───────── 온라인 (기획서 10장) ─────────
 // 호스트 = P1, 링크로 들어온 친구 = P2. 친구 입력은 네트워크로 와서 P2 명령이 된다.
 // 호스트일 때 이 컴퓨터의 키는 P1·P2 키 모두 P1 조작으로 쓴다.
-export const online = { role: null }; // null | 'host'
+export const online = { role: null, toGuest: null }; // role: null | 'host', toGuest(msg) = 친구에게 보내기 (방이 열려 있을 때)
+
+// 이 플레이어의 패드를 진동 (kind = gamepad.js RUMBLE의 light · hit · big · ko)
+//   온라인 호스트: P2는 친구 PC의 패드로 보내고, 이 PC의 패드는 모두 P1 조작이므로 P1 진동을 받는다
+export function rumble(player, kind) {
+  if (online.role === 'host' && player === 2) { online.toGuest?.({ t: 'rumble', kind }); return; }
+  const players = online.role === 'host' ? [1, 2] : [player];
+  const slots = [...new Set(players.flatMap((p) => Object.values(bindings[p]).flat().filter(isPad).map((c) => Number(/^Pad(\d+)/.exec(c)[1]))))];
+  rumbleSlots(slots, kind);
+}
 const routers = new Set();
 
 // 친구가 누르거나 뗀 동작을 지금 떠 있는 모든 장면에 P2 명령으로 전달

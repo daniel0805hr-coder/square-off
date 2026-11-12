@@ -1,7 +1,8 @@
 // 온라인 친구 화면의 키 설정 창. 친구 화면은 게임(Phaser)을 돌리지 않으므로 키 설정 화면을 HTML로 따로 만든다.
 // 바꾼 키는 친구 브라우저에 저장되고(controls.js와 같은 저장소), 키 1·키 2 모두 친구(P2) 조작이 된다.
 
-import { ACTIONS, ACTION_NAMES, actionLabel, padLabel, setBinding, resetBindings, mouseCode } from '../input/controls.js';
+import { rumbleEnabled, setRumble, rumbleSupport } from '../input/gamepad.js';
+import { ACTIONS, ACTION_NAMES, actionLabel, padLabel, setBinding, resetBindings, mouseCode, isFixedPadAction, padBlockReason } from '../input/controls.js';
 
 const COLORS = { bg: '#1b1a24', line: '#4a4658', text: '#f2ead8', dim: '#8d8798', on: '#ffe08a', field: '#111018' };
 const font = (size) => `${size}px Galmuri11, sans-serif`;
@@ -26,17 +27,18 @@ export function addGuestKeys(root, { onOpen, onClose }) {
   root.append(panel);
 
   let listening = null; // { player, action } — 새 키를 기다리는 칸
+  let note = null; // 고정 패드 버튼을 고르려 했을 때 안내
 
   const render = () => {
     panel.replaceChildren();
     const title = Object.assign(document.createElement('div'), { textContent: '내 키 설정 (P2 · 흑)' });
     Object.assign(title.style, { font: font(14), textAlign: 'center', marginBottom: '4px' });
     const sub = Object.assign(document.createElement('div'), {
-      textContent: listening
+      textContent: note || (listening
         ? '새 키·마우스·패드 버튼을 누르세요 (마우스 왼쪽은 이 칸을 클릭) · Esc = 취소'
-        : '칸을 눌러 바꾸기 · 키 1·키 2 둘 다 내 조작 · 겹치면 서로 바뀜 · 패드는 키 1 = 패드1',
+        : '칸을 눌러 바꾸기 · 키 1·키 2 둘 다 내 조작 · 겹치면 서로 바뀜 · 패드는 키 1 = 패드1 · 패드 고정: 십자키 이동 · A 선택 · B 취소'),
     });
-    Object.assign(sub.style, { font: font(10), color: listening ? COLORS.on : COLORS.dim, textAlign: 'center', marginBottom: '10px' });
+    Object.assign(sub.style, { font: font(10), color: note ? '#ff9a7a' : listening ? COLORS.on : COLORS.dim, textAlign: 'center', marginBottom: '10px' });
     panel.append(title, sub);
 
     const table = document.createElement('div');
@@ -51,7 +53,7 @@ export function addGuestKeys(root, { onOpen, onClose }) {
         const cell = Object.assign(document.createElement('button'), { textContent: on ? '키를 누르세요…' : actionLabel(player, action) });
         if (!on) {
           const pad = Object.assign(document.createElement('span'), { textContent: ` / ${padLabel(player, action, true)}` });
-          pad.style.color = COLORS.dim;
+          pad.style.color = isFixedPadAction(action) ? '#5f5a6c' : COLORS.dim; // 고정 패드 버튼은 어둡게
           cell.append(pad);
         }
         cell.dataset.player = player;
@@ -61,7 +63,7 @@ export function addGuestKeys(root, { onOpen, onClose }) {
           border: `1px solid ${COLORS.line}`, padding: '3px 4px', cursor: 'pointer', minWidth: 0,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         });
-        cell.addEventListener('click', () => { if (!listening) { listening = { player, action }; render(); } });
+        cell.addEventListener('click', () => { if (!listening) { listening = { player, action }; note = null; render(); } });
         table.append(cell);
       }
     }
@@ -71,17 +73,25 @@ export function addGuestKeys(root, { onOpen, onClose }) {
     Object.assign(row.style, { display: 'flex', gap: '8px', justifyContent: 'center', marginTop: '12px' });
     const reset = Object.assign(document.createElement('button'), { textContent: '기본값으로' });
     const close = Object.assign(document.createElement('button'), { textContent: '닫기' });
-    for (const b of [reset, close]) Object.assign(b.style, { font: font(12), border: 0, padding: '5px 14px', cursor: 'pointer' });
-    Object.assign(reset.style, { background: COLORS.field, color: COLORS.text, border: `1px solid ${COLORS.line}` });
+    const buzz = Object.assign(document.createElement('button'), { textContent: `패드 진동: ${rumbleEnabled() ? '켜짐' : '꺼짐'}` });
+    for (const b of [reset, buzz, close]) Object.assign(b.style, { font: font(12), border: 0, padding: '5px 14px', cursor: 'pointer' });
+    for (const b of [reset, buzz]) Object.assign(b.style, { background: COLORS.field, color: COLORS.text, border: `1px solid ${COLORS.line}` });
+    buzz.addEventListener('click', () => {
+      if (listening) return;
+      setRumble(!rumbleEnabled());
+      note = rumbleEnabled() && rumbleSupport() === 'browser' ? '이 브라우저는 패드 진동을 지원하지 않아요 — 크롬·엣지에서 열어 주세요' : null;
+      render();
+    });
     Object.assign(close.style, { background: COLORS.text, color: COLORS.field });
     reset.addEventListener('click', () => { if (!listening) { resetBindings(); render(); } });
     close.addEventListener('click', () => { if (!listening) hide(); });
-    row.append(reset, close);
+    row.append(reset, buzz, close);
     panel.append(row);
   };
 
   const assign = (code) => {
-    setBinding(listening.player, listening.action, code);
+    note = padBlockReason(listening.action, code);
+    if (!note) setBinding(listening.player, listening.action, code);
     listening = null;
     render();
   };

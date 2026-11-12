@@ -2,7 +2,7 @@ import { TurnBattle, ACTIONS, ACTION_LABEL } from '../logic/turnBattle.js';
 import { chooseTurnAction } from '../logic/ai.js';
 import { TURN } from '../logic/balance.js';
 import { PIECE_NAMES } from '../logic/chess.js';
-import { InputRouter, keyLabels } from '../input/controls.js';
+import { InputRouter, keyLabels, usesPad, online, rumble } from '../input/controls.js';
 import { FONT_SMALL, FONT_BIG, text, PLAYER_COLOR, PLAYER_HEX, SIDE_NAME, endTitle } from '../ui/style.js';
 import { FighterView } from '../ui/fighter.js';
 import { UI, drawBattleHud, drawBrickWall, wallShadow, bakedLayer } from '../ui/frame.js';
@@ -10,6 +10,10 @@ import { FxLayer, FX, RAMP, duelEntrance, wallTorches } from '../ui/pixelfx.js';
 
 const ROLE_NAME = { attacker: '공격', defender: '수비' };
 const KEY_ACTION = { turnAttack: 'attack', turnDefend: 'defend', turnSkill: 'skill', turnFocus: 'focus', turnHeal: 'heal' };
+// 스틱·십자키로 바로 고르기 (패드에 버튼을 따로 지정하지 않아도 됨). 커서를 띄우지 않아 상대에게 들키지 않는다
+//   A(선택 키) = 공격 (실시간 전투의 공격 버튼과 같음), ↑ 스킬, ↓ 방어, → 집중, ← 회복
+const DIR_ACTION = { confirm: 'attack', up: 'skill', down: 'defend', right: 'focus', left: 'heal' };
+const DIR_LABEL = { attack: 'A', skill: '↑', defend: '↓', focus: '→', heal: '←' };
 const SPOT_X = { 1: 190, 2: 450 }; // 백(P1) 왼쪽, 흑(P2) 오른쪽
 const SPOT_Y = 160;
 const FEET_Y = SPOT_Y + 12; // 2배 크기 말이 서는 바닥 (말 그림 가운데가 SPOT_Y 근처에 오게)
@@ -38,8 +42,9 @@ export class TurnBattleScene extends Phaser.Scene {
     this.phaseTime = 0;
 
     new InputRouter(this, ({ player, action, repeat }) => {
-      if (repeat || !KEY_ACTION[action]) return;
-      this.choose(player, KEY_ACTION[action]);
+      const pick = KEY_ACTION[action] || DIR_ACTION[action];
+      if (repeat || !pick) return;
+      this.choose(player, pick);
     });
 
     this.drawHall();
@@ -203,6 +208,7 @@ export class TurnBattleScene extends Phaser.Scene {
 
   floatDamage(player, dmg) {
     this.cameras.main.shake(90, 0.006);
+    rumble(player, 'hit');
     this.pfx.play(FX.hitSpark, { x: SPOT_X[player], y: FEET_Y, height: FEET_Y - SPOT_Y, aim: player === 1 ? Math.PI : 0, palette: RAMP[3 - player] });
     this.views[player].flash();
     this.floatText(player, `-${dmg}`, '#ffe08a');
@@ -222,6 +228,7 @@ export class TurnBattleScene extends Phaser.Scene {
     if (b.reason === 'ko' || b.winner === 'attacker') {
       const x = SPOT_X[loser.player];
       this.views[loser.player].fall(loser.player === 1 ? -1 : 1);
+      rumble(loser.player, 'ko');
       this.pfx.play(FX.critHit, { x, y: FEET_Y, height: FEET_Y - SPOT_Y, aim: loser.player === 1 ? Math.PI : 0, palette: RAMP[winner.player] });
       this.time.delayedCall(250, () => this.pfx.play(FX.poof, { x, y: FEET_Y }));
     } else {
@@ -343,7 +350,9 @@ export class TurnBattleScene extends Phaser.Scene {
       const isBot = this.bot?.player === p;
       const picking = this.picking(p);
       const opts = b.options(f);
-      const keys = keyLabels(p).turn;
+      // 패드 쓰는 사람(온라인 친구 포함)에게는 스틱 방향으로 안내, 키보드는 턴제 키로 안내 (둘 다 동작함)
+      const byDir = usesPad(p) || (online.role === 'host' && p === 2);
+      const keys = byDir ? ACTIONS.map((a) => DIR_LABEL[a]) : keyLabels(p).turn;
       const line = (a, i) => {
         const name = a === 'skill' ? `스킬: ${f.skill.name}` : a === 'heal' ? `회복 (${f.healsLeft}회 남음)` : ACTION_LABEL[a];
         const why = !opts.includes(a) ? (a === f.sealed ? ' (봉인)' : a === 'heal' && f.healsLeft <= 0 ? '' : ' (연속 불가)') : '';

@@ -1,4 +1,5 @@
-import { InputRouter, ACTIONS, ACTION_NAMES, actionLabel, padLabel, setBinding, resetBindings, mouseCode } from '../input/controls.js';
+import { InputRouter, ACTIONS, ACTION_NAMES, actionLabel, padLabel, setBinding, resetBindings, mouseCode, isPad, isFixedPadAction, isStartButton, padBlockReason, PAD_FIXED } from '../input/controls.js';
+import { rumbleEnabled, setRumble, rumbleSlots, rumbleSupport } from '../input/gamepad.js';
 import { FONT_SMALL, FONT_BIG, text, C, PLAYER_COLOR, PLAYER_HEX } from '../ui/style.js';
 import { UI, UI_HEX, drawPanel } from '../ui/frame.js';
 
@@ -7,8 +8,10 @@ const COL_W = 230;
 const PAD_W = 56; // 칸 오른쪽의 패드 버튼 자리
 const ROW_Y = 66;
 const ROW_H = 18;
-const BUTTONS = ['기본값으로', '돌아가기']; // 마지막 줄 (왼쪽 / 오른쪽)
+const BUTTONS = ['기본값으로', '돌아가기']; // 단추 줄 (왼쪽 / 오른쪽)
 const BUTTON_ROW = ACTIONS.length;
+const RUMBLE_ROW = BUTTON_ROW + 1; // 마지막 줄: 패드 진동 켜기·끄기 / 진동 시험
+const LAST_ROW = RUMBLE_ROW;
 
 // 키 설정 화면. 칸을 고르고 선택 키를 누른 뒤, 새로 쓸 키(또는 마우스·패드 버튼)를 누르면 바뀐다.
 // 키를 누르면 키가, 패드 버튼을 누르면 패드 버튼이 바뀐다 (한 동작에 키 하나 + 패드 버튼 하나)
@@ -23,7 +26,7 @@ export class KeyConfigScene extends Phaser.Scene {
 
     const bg = this.add.graphics().fillStyle(0x111018).fillRect(0, 0, 640, 360);
     // 플레이어마다 패널 하나 (머리 띠에 P1/P2)
-    const bottom = ROW_Y + (BUTTON_ROW + 1) * ROW_H + 10;
+    const bottom = ROW_Y + (LAST_ROW + 1) * ROW_H + 10;
     for (const p of [1, 2]) {
       drawPanel(bg, COL_X[p] - 10, 38, COL_W + 20, bottom - 38);
       bg.fillStyle(UI.panelHi).fillRect(COL_X[p] - 8, 40, COL_W + 16, 18);
@@ -35,7 +38,7 @@ export class KeyConfigScene extends Phaser.Scene {
       this.add.text(COL_X[p] + COL_W - 8, 44, '패드', text(10, UI_HEX.muted, FONT_SMALL)).setOrigin(1, 0);
       this.add.text(COL_X[p] + COL_W - PAD_W - 8, 44, '키', text(10, UI_HEX.muted, FONT_SMALL)).setOrigin(1, 0);
     }
-    this.help = this.add.text(320, 326, '', text(10, UI_HEX.muted, FONT_SMALL)).setOrigin(0.5, 0);
+    this.help = this.add.text(320, 340, '', text(10, UI_HEX.muted, FONT_SMALL)).setOrigin(0.5, 0);
     this.gfx = this.add.graphics();
     this.cells = [];
 
@@ -47,14 +50,18 @@ export class KeyConfigScene extends Phaser.Scene {
       event.stopImmediatePropagation();
       if (event.repeat) return;
       this.listening = false;
-      if (event.code !== 'Escape') {
-        const p = this.sel.col + 1;
-        setBinding(p, ACTIONS[this.sel.row], event.code || `key:${event.key}`);
+      const code = event.code || `key:${event.key}`;
+      // Esc · 패드 B · 패드 Start = 바꾸지 않고 그만두기
+      const quit = code === 'Escape' || isStartButton(code) || (isPad(code) && code.endsWith(`:B${PAD_FIXED.cancel}`));
+      if (!quit) {
+        const action = ACTIONS[this.sel.row];
+        this.note = padBlockReason(action, code);
+        if (!this.note) setBinding(this.sel.col + 1, action, code);
       }
       this.render();
     };
     this.onEscape = (event) => {
-      if (event.code === 'Escape' && !this.listening && this.sys.isActive()) this.back();
+      if ((event.code === 'Escape' || isStartButton(event.code)) && !this.listening && this.sys.isActive()) this.back();
     };
     // 마우스 버튼도 지정할 수 있다
     this.onRawMouse = (event) => {
@@ -89,7 +96,8 @@ export class KeyConfigScene extends Phaser.Scene {
   onCommand({ action, source, remote }) {
     // 이 화면에서 마우스는 칸 고르기에만 쓴다. 온라인 친구는 호스트의 키 설정을 건드리지 않는다
     if (this.listening || source === 'mouse' || remote) return;
-    const rows = BUTTON_ROW + 1;
+    this.note = null;
+    const rows = LAST_ROW + 1;
     if (action === 'up') this.sel.row = (this.sel.row + rows - 1) % rows;
     if (action === 'down') this.sel.row = (this.sel.row + 1) % rows;
     if (action === 'left' || action === 'right') this.sel.col = 1 - this.sel.col;
@@ -101,9 +109,10 @@ export class KeyConfigScene extends Phaser.Scene {
   onPointer({ x, y }) {
     if (this.listening || this.justAssigned) return;
     const row = Math.floor((y - ROW_Y + 4) / ROW_H);
-    if (row < 0 || row > BUTTON_ROW) return;
+    if (row < 0 || row > LAST_ROW) return;
     const col = x < 320 ? 0 : 1;
     this.sel = { row, col };
+    this.note = null;
     this.activate();
     this.render();
   }
@@ -119,6 +128,14 @@ export class KeyConfigScene extends Phaser.Scene {
   }
 
   activate() {
+    if (this.sel.row === RUMBLE_ROW) {
+      if (this.sel.col === 0) setRumble(!rumbleEnabled());
+      else rumbleSlots(null, 'big');
+      // 안 울리는 이유를 알려 준다
+      const why = { nopad: '연결된 패드가 없어요 (패드 버튼을 한 번 눌러 주세요)', browser: '이 브라우저는 패드 진동을 지원하지 않아요 — 크롬·엣지에서 열어 주세요' }[rumbleSupport()];
+      this.note = !rumbleEnabled() ? null : why ?? (this.sel.col === 1 ? '진동을 보냈어요 (안 울리면 패드가 진동을 지원하지 않는 것)' : null);
+      return;
+    }
     if (this.sel.row === BUTTON_ROW) {
       if (this.sel.col === 0) resetBindings();
       else this.back();
@@ -149,20 +166,29 @@ export class KeyConfigScene extends Phaser.Scene {
           add(x + COL_W - 8, y - 1, '키나 패드 버튼을 누르세요…', text(12, '#ffe08a')).setOrigin(1, 0);
         } else {
           add(x + COL_W - PAD_W - 8, y - 1, actionLabel(p, action), text(12, '#f2ead8')).setOrigin(1, 0);
-          add(x + COL_W - 8, y + 1, padLabel(p, action, true), text(10, '#b8b0c8', FONT_SMALL)).setOrigin(1, 0);
+          // 고정 패드 버튼은 어둡게 (바꿀 수 없음)
+          const fixed = isFixedPadAction(action);
+          add(x + COL_W - 8, y + 1, padLabel(p, action, true), text(10, fixed ? '#5f5a6c' : '#b8b0c8', FONT_SMALL)).setOrigin(1, 0);
         }
       }
     });
-    BUTTONS.forEach((label, col) => {
-      const x = COL_X[col + 1], y = ROW_Y + BUTTON_ROW * ROW_H + 8;
-      const on = this.sel.row === BUTTON_ROW && this.sel.col === col;
+    const buttonRow = (row, labels) => labels.forEach((label, col) => {
+      const x = COL_X[col + 1], y = ROW_Y + row * ROW_H + 8;
+      const on = this.sel.row === row && this.sel.col === col;
       g.fillStyle(on ? 0x3a3746 : C.panel).fillRect(x, y - 4, COL_W, ROW_H - 4);
       if (on) g.lineStyle(2, 0xf2ead8).strokeRect(x + 1, y - 3, COL_W - 2, ROW_H - 6);
       add(x + COL_W / 2, y - 1, label, text(12, on ? '#f2ead8' : '#8d8798')).setOrigin(0.5, 0);
     });
+    buttonRow(BUTTON_ROW, BUTTONS);
+    buttonRow(RUMBLE_ROW, [`패드 진동: ${rumbleEnabled() ? '켜짐' : '꺼짐'}`, '진동 시험']);
 
-    this.help.setText(this.listening
-      ? '새 키·마우스·패드 버튼을 누르세요 (마우스 왼쪽은 이 칸을 클릭) · Esc = 취소 · 겹치면 서로 바뀜'
-      : '이동 = 아무 플레이어의 이동 키 · 선택 키 = 바꾸기 · 취소 키 / Esc = 돌아가기 · 패드는 P1 = 패드1, P2 = 패드2');
+    const fixedRow = this.sel.row < BUTTON_ROW && isFixedPadAction(ACTIONS[this.sel.row]);
+    this.help.setColor(this.note ? '#ff9a7a' : UI_HEX.muted);
+    this.help.setText(this.note
+      ? this.note
+      : this.listening
+        ? (fixedRow ? '새 키·마우스 버튼을 누르세요 (이 줄의 패드 버튼은 고정) · Esc / 패드 B = 취소'
+          : '새 키·마우스·패드 버튼을 누르세요 (마우스 왼쪽은 이 칸 클릭) · Esc / 패드 B = 취소 · 겹치면 서로 바뀜')
+        : '패드 고정: 십자키 이동 · A 선택 · B 취소 · Start 나가기 (어두운 칸) · 패드는 P1 = 패드1, P2 = 패드2');
   }
 }

@@ -4,9 +4,10 @@
 //   - 인터넷 링크 방 (peer): PeerJS(WebRTC, P2P). 연결 주선만 PeerJS 공개 서버를 쓰고, 데이터는 두 브라우저가 직접 주고받는다.
 //   - 같은 네트워크 방 (lan): 같은 와이파이·VPN(하마치·라드민·ZeroTier 등)에서 호스트 PC의 serve.py를 거쳐 주고받는다. 인터넷 서버 불필요.
 // 친구 → 호스트 메시지: { t: 'down' | 'up', action, source } (동작 키), { t: 'click', x, y } (게임 좌표 640×360 클릭)
-// 호스트 → 친구 메시지(peer만): { t: 'full' } (이미 다른 친구가 들어와 있음)
+// 호스트 → 친구 메시지: { t: 'rumble', kind } (친구 패드 진동). peer만: { t: 'full' } (이미 다른 친구가 들어와 있음)
 
 import { ACTIONS, remoteInput, actionFor, mouseCode, online } from '../input/controls.js';
+import { rumbleSlots, RUMBLE } from '../input/gamepad.js';
 import { addGuestKeys } from './guestKeys.js';
 import { hostVideoStats, guestVideoStats, createStatsPanel } from './netstats.js';
 import { preferH264 } from './codec.js';
@@ -165,6 +166,7 @@ function hostPeer({ game, onStatus, onClick }) {
     };
     c.on('open', () => {
       online.role = 'host';
+      online.toGuest = (msg) => { if (c.open) c.send(msg); };
       call = peer.call(c.peer, stream, { sdpTransform: hostSdp });
       retune = tuneVideo(call.peerConnection, () => lite);
       onStatus({ state: 'joined' });
@@ -190,6 +192,7 @@ function hostPeer({ game, onStatus, onClick }) {
       call = null;
       releaseAll();
       online.role = null;
+      online.toGuest = null;
       onStatus({ state: 'left' });
     });
   });
@@ -199,6 +202,7 @@ function hostPeer({ game, onStatus, onClick }) {
       clearTimeout(serverTimer);
       releaseAll();
       online.role = null;
+      online.toGuest = null;
       frames.stop();
       track.stop();
       peer.destroy();
@@ -243,8 +247,12 @@ function hostLan({ game, onStatus, onClick }) {
     events.onmessage = (e) => {
       let msg = null;
       try { msg = JSON.parse(e.data); } catch { return; }
-      if (msg.t === 'join') { online.role = 'host'; onStatus({ state: 'joined' }); }
-      else if (msg.t === 'leave') { releaseAll(); setLite(false); online.role = null; onStatus({ state: 'left' }); }
+      if (msg.t === 'join') {
+        online.role = 'host';
+        // 친구에게 보낼 것(진동)은 serve.py를 거쳐 친구의 이벤트 스트림으로
+        online.toGuest = (m) => { fetch('lan/toguest', { method: 'POST', body: JSON.stringify(m) }).catch(() => {}); };
+        onStatus({ state: 'joined' });
+      } else if (msg.t === 'leave') { releaseAll(); setLite(false); online.role = null; online.toGuest = null; onStatus({ state: 'left' }); }
       else onGuestMessage(msg, onClick, setLite);
     };
     onStatus({ state: 'waiting', links });
@@ -255,6 +263,7 @@ function hostLan({ game, onStatus, onClick }) {
       closed = true;
       releaseAll();
       online.role = null;
+      online.toGuest = null;
       frames?.stop();
       events?.close();
     },
@@ -415,6 +424,11 @@ function guestLite(root, send) {
   return { get: () => lite, resend: announce };
 }
 
+// 친구 화면: 호스트가 보낸 진동을 이 PC에 연결된 패드 모두에 (친구 패드는 모두 P2 조작)
+function guestRumble(kind) {
+  if (RUMBLE[kind]) rumbleSlots(null, kind);
+}
+
 // 인터넷 링크 방에 들어간다 (?room=코드)
 export function joinRoom(code, root) {
   const video = Object.assign(document.createElement('video'), { autoplay: true, muted: true, playsInline: true });
@@ -472,6 +486,7 @@ export function joinRoom(code, root) {
     conn.on('data', (msg) => {
       if (msg?.t === 'full') fail('이미 다른 친구가 들어와 있어요');
       else if (msg?.t === 'hstats') hostStats = msg.s;
+      else if (msg?.t === 'rumble') guestRumble(msg.kind);
       else if (msg?.t === 'pong' && msg.id === pingSent.id) pingMs = Math.round(performance.now() - pingSent.at);
     });
     conn.on('close', () => { video.srcObject = null; fail('연결이 끊겼어요. 호스트에게 새 링크를 받아 다시 들어오세요'); });
@@ -516,5 +531,12 @@ export function joinLan(root) {
   };
   sendGuestInput(root, img, send);
   const lite = guestLite(root, send);
+  // 호스트가 보내는 것(진동)을 받는다
+  const events = new EventSource(`lan/guest-events?id=${id}`);
+  events.onmessage = (e) => {
+    let msg = null;
+    try { msg = JSON.parse(e.data); } catch { return; }
+    if (msg?.t === 'rumble') guestRumble(msg.kind);
+  };
   img.addEventListener('load', () => lite.resend(), { once: true });
 }

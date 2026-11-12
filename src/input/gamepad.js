@@ -81,3 +81,45 @@ export function padName(code) {
   if (!m) return null;
   return `패드${m[1]} ${BUTTON_NAMES[m[2]] ?? `버튼${m[2]}`}`;
 }
+
+// ───────── 진동 ─────────
+// 크롬·엣지 등 진동을 지원하는 브라우저 + 진동 모터가 있는 패드에서만 울린다 (안 되면 조용히 무시)
+// 세기: light = 착지·막힘처럼 가벼운 것, hit = 맞음, big = 필살기·벽 충돌, ko = 쓰러짐·잡힘
+export const RUMBLE = {
+  light: { strong: 0.1, weak: 0.35, ms: 70 },
+  hit: { strong: 0.35, weak: 0.65, ms: 120 },
+  big: { strong: 0.75, weak: 1, ms: 240 },
+  ko: { strong: 1, weak: 1, ms: 450 },
+};
+const RUMBLE_KEY = 'squareoff.rumble.v1';
+let rumbleOn = (() => { try { return localStorage.getItem(RUMBLE_KEY) !== '0'; } catch { return true; } })();
+export const rumbleEnabled = () => rumbleOn;
+export function setRumble(on) {
+  rumbleOn = on;
+  try { localStorage.setItem(RUMBLE_KEY, on ? '1' : '0'); } catch { /* 저장 불가 */ }
+  if (on) rumbleSlots(null, 'hit'); // 켜면 한 번 울려서 알려 줌
+}
+
+// 지금 진동을 쓸 수 있는가: 'ok' | 'nopad' (패드 없음) | 'browser' (브라우저가 진동 미지원 — 파이어폭스 등)
+export function rumbleSupport() {
+  const list = [...(navigator.getGamepads?.() || [])].filter((g) => g?.connected);
+  if (!list.length) return 'nopad';
+  return list.some((g) => g.vibrationActuator?.playEffect || g.hapticActuators?.[0]?.pulse) ? 'ok' : 'browser';
+}
+
+// slots = 울릴 패드 번호들 (null = 연결된 모든 패드)
+export function rumbleSlots(slots, kind = 'hit') {
+  const fx = RUMBLE[kind];
+  if (!rumbleOn || !fx || !navigator.getGamepads) return;
+  for (const g of navigator.getGamepads() || []) {
+    if (!g?.connected) continue;
+    const slot = pads.get(g.index)?.slot;
+    if (slots && !slots.includes(slot)) continue;
+    const act = g.vibrationActuator;
+    if (act?.playEffect) {
+      act.playEffect('dual-rumble', { startDelay: 0, duration: fx.ms, strongMagnitude: fx.strong, weakMagnitude: fx.weak }).catch(() => {});
+    } else {
+      g.hapticActuators?.[0]?.pulse?.(fx.weak, fx.ms); // 파이어폭스 일부
+    }
+  }
+}

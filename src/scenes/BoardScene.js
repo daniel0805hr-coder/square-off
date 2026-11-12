@@ -1,5 +1,5 @@
 import { ChessGame, WHITE, BLACK, PIECE_NAMES, PROMOTION_TYPES, isLightSquare } from '../logic/chess.js';
-import { InputRouter, keyLabels, online, actionFor } from '../input/controls.js';
+import { InputRouter, keyLabels, online, isStartButton, anyPad, rumble } from '../input/controls.js';
 import { hostRoom, HostPanel } from '../net/online.js';
 import { chooseChessMove, BOT_LEVELS } from '../logic/ai.js';
 import { BOARD } from '../logic/balance.js';
@@ -83,9 +83,9 @@ export class BoardScene extends Phaser.Scene {
     // 전투 또는 키 설정 화면에서 돌아왔을 때
     this.events.on('wake', (_sys, data) => (data?.from === 'keys' ? this.render() : this.onBattleEnd(data)));
     this.input.on('pointerdown', (p) => this.onPointer(p, 'local'));
-    // 하던 판 그만두기: Esc (패드는 동작에 지정하지 않은 Start 버튼). 이 컴퓨터에서만 — 온라인 친구는 못 끈다
+    // 하던 판 그만두기: Esc · 패드 Start (고정 버튼). 이 컴퓨터에서만 — 온라인 친구는 못 끈다
     const onQuitKey = (event) => {
-      const quitKey = event.code === 'Escape' || (/^Pad\d+:B9$/.test(event.code) && !actionFor(event.code));
+      const quitKey = event.code === 'Escape' || isStartButton(event.code);
       if (quitKey && !event.repeat && this.sys.isActive()) this.askQuit();
     };
     window.addEventListener('keydown', onQuitKey);
@@ -587,6 +587,7 @@ export class BoardScene extends Phaser.Scene {
     // 두 말이 칸 위에서 맞붙는 불꽃 → 그 칸 속으로 줌인
     this.fx.play(FX.parry, { x, y: y + 6, height: 6 });
     cam.shake(120, 0.004);
+    for (const p of [1, 2]) rumble(p, 'light'); // 맞붙는 순간
     this.time.delayedCall(280, () => {
       cam.pan(x, y, 450, 'Sine.easeIn');
       cam.zoomTo(6, 450, 'Sine.easeIn');
@@ -617,6 +618,7 @@ export class BoardScene extends Phaser.Scene {
     const cam = this.cameras.main;
     cam.shake(500, 0.006);
     cam.flash(200, 255, 80, 60);
+    for (const p of [1, 2]) rumble(p, 'big'); // 체크메이트
     const k = this.tileCenter(d.king);
     this.fx.play(FX.critHit, { x: k.x, y: k.y + 8, height: 8, palette: RAMP.duel });
     this.time.delayedCall(1100, () => {
@@ -934,6 +936,7 @@ export class BoardScene extends Phaser.Scene {
       status = option === 'map' ? MAP_CHOICES.find((m) => m.id === this.rules.map).desc
         : option === 'draft' ? '시작 전에 각자 칸 3개의 지형을 바꿔요 (킹 칸 제외)'
         : option === 'timer' ? '시간이 다 되면 컴퓨터가 대신 한 수 둬요'
+        : anyPad() ? '모드를 고르세요 (십자키 위/아래 + A · 규칙은 ←/→)'
         : '모드를 고르세요 (위/아래 + 선택 키 · 규칙은 왼쪽/오른쪽)';
     }
     else if (this.mode === 'draft') {
@@ -947,6 +950,7 @@ export class BoardScene extends Phaser.Scene {
     else if (!g.result) status = `${SIDE_NAME[g.turn]} 차례${g.inCheck(g.turn) ? ' — 체크!' : ''}`;
     else status = '';
     this.statusText.setText(status);
+    this.quitHint.setText(anyPad() ? 'Esc · 패드 Start = 그만두고 메뉴로' : 'Esc = 그만두고 메뉴로');
     this.quitHint.setVisible(['select', 'promotion', 'draft', 'veteran'].includes(this.mode));
   }
 

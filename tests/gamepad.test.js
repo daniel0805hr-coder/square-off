@@ -49,9 +49,45 @@ test('패드 배치: 기본값, 키와 따로 바뀜, 겹치면 맞바꿈', () =
   assert.equal(actionFor('Pad2:B3'), 'turnAttack');
   setBinding(1, 'confirm', 'Space'); // 키만 바뀌고 패드 A는 그대로
   assert.deepEqual(getBindings()[1].confirm, ['Pad1:B0', 'Space']);
-  setBinding(1, 'skill', 'Pad1:B0'); // 패드 A를 스킬로 → 선택은 원래 스킬 버튼(X)을 받음
-  assert.deepEqual(getBindings()[1].skill, ['KeyG', 'Pad1:B0']);
-  assert.deepEqual(getBindings()[1].confirm, ['Space', 'Pad1:B2']);
-  assert.equal(keyLabels(1).skill, 'A'); // 패드가 연결돼 있으면 도움말은 패드 버튼으로
+  assert.ok(setBinding(1, 'skill', 'Pad1:B3')); // 스킬을 Y로 → 턴제 공격은 원래 스킬 버튼(X)을 받음
+  assert.deepEqual(getBindings()[1].skill, ['KeyG', 'Pad1:B3']);
+  assert.deepEqual(getBindings()[1].turnAttack, ['Digit1', 'Pad1:B2']);
+  assert.equal(keyLabels(1).skill, 'Y'); // 패드가 연결돼 있으면 도움말은 패드 버튼으로
   resetBindings();
+});
+
+test('패드 고정 버튼: A·B·십자키·Start는 바꿀 수 없음', () => {
+  resetBindings();
+  assert.equal(setBinding(1, 'skill', 'Pad1:B0'), false); // A를 스킬로 못 씀
+  assert.equal(setBinding(1, 'turnHeal', 'Pad1:B9'), false); // Start도 고정
+  assert.equal(setBinding(1, 'confirm', 'Pad1:B2'), false); // 선택의 패드 버튼은 A 고정
+  assert.equal(setBinding(2, 'up', 'Pad2:B3'), false);
+  assert.deepEqual(getBindings()[1].confirm, ['KeyF', 'Pad1:B0']);
+  assert.deepEqual(getBindings()[1].skill, ['KeyG', 'Pad1:B2']);
+  assert.ok(setBinding(1, 'confirm', 'Enter')); // 키는 그대로 바꿀 수 있음
+  resetBindings();
+});
+
+test('진동: 자기 패드만 울림, 온라인 친구 몫은 친구에게 보냄', async () => {
+  const { rumble, online } = await import('../src/input/controls.js');
+  const { setRumble } = await import('../src/input/gamepad.js');
+  resetBindings();
+  const played = [];
+  pads.forEach((g, i) => { g.vibrationActuator = { type: 'dual-rumble', playEffect: (_t, o) => { played.push([i + 1, o.duration]); return Promise.resolve(); } }; });
+  step();
+  rumble(2, 'hit');
+  assert.deepEqual(played, [[2, 120]]); // P2 → 패드2만
+  played.length = 0;
+  setRumble(false);
+  rumble(1, 'ko');
+  assert.deepEqual(played, []); // 꺼 두면 안 울림
+  setRumble(true);
+  played.length = 0;
+  const sent = [];
+  Object.assign(online, { role: 'host', toGuest: (m) => sent.push(m) });
+  rumble(2, 'ko');
+  rumble(1, 'light');
+  assert.deepEqual(sent, [{ t: 'rumble', kind: 'ko' }]); // P2는 친구 PC로
+  assert.deepEqual(played.map((p) => p[0]).sort(), [1, 2]); // 호스트 PC 패드는 모두 P1
+  Object.assign(online, { role: null, toGuest: null });
 });

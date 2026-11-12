@@ -3,7 +3,7 @@ import { ChaseBot } from '../logic/ai.js';
 import { CHASE as CH } from '../logic/balance.js';
 import { PIECE_NAMES } from '../logic/chess.js';
 import { currentHp } from '../logic/units.js';
-import { InputRouter, keyLabels } from '../input/controls.js';
+import { InputRouter, keyLabels, rumble } from '../input/controls.js';
 import { FONT_SMALL, FONT_BIG, text, setLabel, PLAYER_COLOR, PLAYER_HEX, SIDE_NAME } from '../ui/style.js';
 import { FighterView } from '../ui/fighter.js';
 import { drawBattleHud, drawBrickWall, bakedLayer } from '../ui/frame.js';
@@ -120,6 +120,7 @@ export class ChaseScene extends Phaser.Scene {
       case 'tag': { // 술래가 닿음 (아직 안 잡힘이면 도망자는 잠깐 무적·가속)
         const pos = this.toScreen(ev.to);
         this.cameras.main.shake(100, 0.007);
+        rumble(ev.to.player, 'hit');
         this.pfx.play(FX.hitSpark, { x: pos.x, y: pos.y + ev.to.body, height: ev.to.body + 12, aim: Math.atan2(ev.to.y - f.y, ev.to.x - f.x), palette: RAMP[f.player] });
         this.views[1].flash();
         const t = this.add.text(pos.x, pos.y - 24, `-${ev.damage}  터치 ${ev.tags}/${CH.tagsToCatch}`, text(12, '#ffe08a'))
@@ -135,6 +136,7 @@ export class ChaseScene extends Phaser.Scene {
         if (caught) {
           this.cameras.main.shake(150, 0.01);
           const [hunter, prey] = [this.chase.attacker, this.chase.defender];
+          rumble(prey.player, 'ko');
           const pos = this.toScreen(prey);
           const aim = Math.atan2(prey.y - hunter.y, prey.x - hunter.x);
           this.pfx.play(FX.critHit, { x: pos.x, y: pos.y + prey.body, height: prey.body + 12, aim, palette: RAMP[hunter.player] });

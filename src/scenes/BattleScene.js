@@ -2,7 +2,7 @@ import { Battle } from '../logic/battle.js';
 import { BattleBot } from '../logic/ai.js';
 import { TOPDOWN as T, ULTIMATE } from '../logic/balance.js';
 import { PIECE_NAMES } from '../logic/chess.js';
-import { InputRouter, keyLabels } from '../input/controls.js';
+import { InputRouter, keyLabels, rumble } from '../input/controls.js';
 import { FONT_SMALL, FONT_BIG, text, setLabel, C, PLAYER_COLOR, PLAYER_HEX, SIDE_NAME, endTitle } from '../ui/style.js';
 import { FighterView } from '../ui/fighter.js';
 import { drawBattleHud, drawBrickWall, wallShadow, bakedLayer } from '../ui/frame.js';
@@ -158,6 +158,7 @@ export class BattleScene extends Phaser.Scene {
       case 'hit': {
         const ult = this.inUltimate(ev.from);
         this.cameras.main.shake(ult ? 160 : 90, ult ? 0.014 : 0.008);
+        rumble(ev.to.player, ult ? 'big' : 'hit');
         this.views[this.battle.fighters.indexOf(ev.to)].flash();
         this.spark(ev.from, ev.to, ult ? sideRamp(ev.from.piece.color) : RAMP[ev.from.player], ult ? FX.critHit : FX.hitSpark);
         this.floatText(ev.to, `-${ev.damage}`, '#ffe08a');
@@ -166,6 +167,7 @@ export class BattleScene extends Phaser.Scene {
       case 'blocked':
         this.spark(ev.from, ev.to, RAMP.block);
         this.floatText(ev.to, '막힘!', '#9fd8ff');
+        rumble(ev.to.player, 'light');
         break;
       case 'dash':
       case 'charge':
@@ -186,6 +188,7 @@ export class BattleScene extends Phaser.Scene {
         break;
       case 'wallStun':
         this.cameras.main.shake(120, 0.01);
+        rumble(f.player, 'big');
         break;
       case 'shield':
         this.floatText(f, '실드!', '#9fd8ff');
@@ -282,6 +285,7 @@ export class BattleScene extends Phaser.Scene {
   // KO: 큰 타격 + 쓰러진 말이 연기로 사라짐
   knockout(winner, loser) {
     this.spark(winner, loser, RAMP[winner.player], FX.critHit);
+    rumble(loser.player, 'ko');
     const pos = this.toScreen(loser);
     this.time.delayedCall(250, () => this.pfx.play(FX.poof, { x: pos.x, y: pos.y + loser.body }));
   }

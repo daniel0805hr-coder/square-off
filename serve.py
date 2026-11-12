@@ -5,6 +5,7 @@
 # 같은 네트워크(LAN·VPN) 방 중계도 맡는다 (src/net/lan.js). 인터넷 없이 이 PC를 거쳐 주고받는다.
 #   호스트 브라우저 → POST /lan/frame (게임 화면 JPEG)   → 친구 브라우저 GET /lan/stream (MJPEG 영상)
 #   친구 브라우저   → POST /lan/input (키·클릭 JSON)     → 호스트 브라우저 GET /lan/events (SSE)
+#   호스트 브라우저 → POST /lan/toguest (진동 등 JSON) → 친구 브라우저 GET /lan/guest-events (SSE)
 #   GET /lan/info → 이 PC의 IP 주소들 (친구에게 보낼 링크용)
 import http.server
 import json
@@ -27,12 +28,21 @@ class LanRelay:
         self.events = []  # (번호, JSON 문자열)
         self.event_id = 0
         self.guest = None  # 지금 들어와 있는 친구의 표식
+        self.to_guest = []  # 호스트 → 친구 (번호, JSON 문자열)
+        self.to_guest_id = 0
 
     def push_event(self, msg):
         with self.cond:
             self.event_id += 1
             self.events.append((self.event_id, json.dumps(msg)))
             del self.events[:-500]
+            self.cond.notify_all()
+
+    def push_guest(self, msg):
+        with self.cond:
+            self.to_guest_id += 1
+            self.to_guest.append((self.to_guest_id, json.dumps(msg)))
+            del self.to_guest[:-100]
             self.cond.notify_all()
 
 
@@ -82,6 +92,8 @@ class NoCacheHandler(http.server.SimpleHTTPRequestHandler):
             return self.send_json({'ips': local_ips(), 'port': self.server.server_address[1]})
         if url.path == '/lan/events':
             return self.serve_events()
+        if url.path == '/lan/guest-events':
+            return self.serve_guest_events(parse_qs(url.query).get('id', [''])[0])
         if url.path == '/lan/stream':
             return self.serve_stream(parse_qs(url.query).get('id', [''])[0])
         return super().do_GET()
@@ -105,7 +117,38 @@ class NoCacheHandler(http.server.SimpleHTTPRequestHandler):
                 return self.send_json({'ok': False}, 409)
             relay.push_event(msg)
             return self.send_json({'ok': True})
+        if url.path == '/lan/toguest':
+            try:
+                msg = json.loads(self.read_body() or b'null')
+            except ValueError:
+                msg = None
+            if not isinstance(msg, dict):
+                return self.send_json({'ok': False}, 400)
+            relay.push_guest(msg)
+            return self.send_json({'ok': True})
         self.send_error(404)
+
+    # 친구: 호스트가 보내는 것(패드 진동)을 실시간으로 받는다 (Server-Sent Events)
+    def serve_guest_events(self, token):
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream')
+        self.end_headers()
+        with relay.cond:
+            last = relay.to_guest_id
+        try:
+            while True:
+                with relay.cond:
+                    relay.cond.wait_for(lambda: relay.to_guest_id > last, timeout=15)
+                    new = [m for i, m in relay.to_guest if i > last]
+                    last = relay.to_guest_id
+                    mine = relay.guest == token
+                if new and mine:
+                    self.wfile.write(''.join(f'data: {m}\n\n' for m in new).encode())
+                else:
+                    self.wfile.write(b': keepalive\n\n')
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
 
     # 호스트: 친구 입력·입장·퇴장을 실시간으로 받는다 (Server-Sent Events)
     def serve_events(self):
